@@ -179,6 +179,23 @@ select{flex:1;min-width:100px;}
 .selectedmovie{display:flex;gap:14px;background:var(--surface);border:2px solid var(--ink);padding:12px;margin-top:10px;align-items:center;box-shadow:4px 4px 0 var(--ink);}
 .selectedmovie img{width:50px;height:75px;object-fit:cover;border:2px solid var(--ink);}
 .dupewarn{background:var(--surface);border:2px solid var(--accent);padding:11px 13px;font-size:12px;color:var(--ink);margin-top:12px;line-height:1.55;}
+
+/* Tag chips */
+.tagbox{display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:var(--surface-2);border:2px solid var(--ink);padding:8px;}
+.tagchip{display:inline-flex;align-items:center;gap:5px;background:var(--ink);color:var(--accent-ink);padding:5px 8px;font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.3px;}
+.tagchip button{background:none;border:none;color:var(--accent-ink);cursor:pointer;font-size:14px;line-height:1;padding:0;}
+.tagbox input{border:none;background:none;flex:1;min-width:110px;padding:4px 2px;font-size:14px;color:var(--ink);font-family:var(--sans);}
+.tagbox input:focus{outline:none;}
+.tag-suggest{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+.tag-suggest button{background:var(--surface);border:1px solid var(--line-soft);color:var(--ink-soft);font-family:var(--mono);font-size:11px;padding:5px 9px;cursor:pointer;text-transform:uppercase;letter-spacing:.3px;}
+
+/* Star rating */
+.starrating{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+.starrow{display:flex;gap:2px;}
+.star{position:relative;display:inline-block;width:24px;height:24px;font-size:22px;line-height:24px;text-align:center;cursor:pointer;}
+.star-bg{position:absolute;top:0;left:0;color:var(--line-soft);}
+.star-fg{position:absolute;top:0;left:0;overflow:hidden;white-space:nowrap;color:var(--accent);}
+.starnum{font-family:var(--mono);font-size:12px;color:var(--ink-soft);}
 .dupewarn b{color:var(--accent);}
 .row2{display:flex;gap:10px;}
 .row2>*{flex:1;}
@@ -384,7 +401,7 @@ let state = {
   selectMode: false,
   selectedIds: new Set(),
   fixModal: null,
-  wf: { genre:'', status:'', fav:false, minRating:'', location:'' },
+  wf: { genre:'', status:'', fav:false, minRating:'', location:'', tag:'' },
   wlActive: null,
   modal: null,            // {type:'add', prefill, editingId, fromWatchlist}
 };
@@ -392,7 +409,7 @@ let state = {
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
 async function loadAll(){
-  state.movies = await loadMovies();
+  state.movies = (await loadMovies()).map(m=>({...m, tags: normalizeTags(m.tags)}));
   state.watchlists = await sGet('watchlists', []);
   state.settings = await sGet('settings', { tmdbKey:'', genreMapMovie:{}, genreMapTv:{}, partnerLabel:'Hilda', theme:'paper', lowDataMode:false });
   if(!state.settings.tmdbKey) state.settings.tmdbKey = DEFAULT_TMDB_KEY;
@@ -575,9 +592,33 @@ function renderContent(){
   if(state.tab==='settings') return renderSettings(c);
   if(state.tab==='prelogged') return renderPrelogged(c);
   if(state.tab==='reviewqueue') return renderReviewQueue(c);
+  if(state.tab==='appearancesettings') return renderAppearanceSettings(c);
+  if(state.tab==='advancedsettings') return renderAdvancedSettings(c);
 }
 
 function isTogether(m){ return m.watchedWith==='together' || m.watchedWith==='hilda' || m.watchedWith==='other'; }
+
+function normalizeTags(tags){
+  if(Array.isArray(tags)) return tags.filter(Boolean);
+  if(typeof tags==='string' && tags.trim()) return tags.split(',').map(t=>t.trim()).filter(Boolean);
+  return [];
+}
+function allTags(){
+  const set = new Set();
+  state.movies.forEach(m=>normalizeTags(m.tags).forEach(t=>set.add(t)));
+  return [...set].sort((a,b)=>a.localeCompare(b));
+}
+function starsHtml(value){
+  value = value||0;
+  let out = '';
+  for(let i=1;i<=5;i++){
+    const full = i*2, half = i*2-1;
+    let pct = 0;
+    if(value>=full) pct=100; else if(value>=half) pct=50;
+    out += `<span class="star" data-star="${i}"><span class="star-bg">★</span><span class="star-fg" style="width:${pct}%">★</span></span>`;
+  }
+  return out;
+}
 
 function posterUrl(url, forceSmall){
   if(!url) return url;
@@ -634,6 +675,7 @@ function filteredMovies(){
     return r >= Number(state.wf.minRating);
   });
   if(state.wf.location) list = list.filter(m=>m.location===state.wf.location);
+  if(state.wf.tag) list = list.filter(m=>normalizeTags(m.tags).includes(state.wf.tag));
   list.sort((a,b)=>(b.startDate||'0')<(a.startDate||'0')?-1:1);
   return list;
 }
@@ -675,6 +717,10 @@ function renderFilterPopup(){
           ${['Cinema','Home','iPad','Phone','Other'].map(l=>`<option value="${l}" ${state.wf.location===l?'selected':''}>${l}</option>`).join('')}
         </select>
       </div>
+      <div class="field">
+        <label>Tag</label>
+        <select id="f-tag"><option value="">Any tag</option>${allTags().map(t=>`<option value="${escapeHtml(t)}" ${state.wf.tag===t?'selected':''}>${escapeHtml(t)}</option>`).join('')}</select>
+      </div>
       <div style="display:flex;gap:10px;margin-top:6px;">
         <button class="btn secondary block" id="f-reset">Reset</button>
         <button class="btn block" id="f-done">Done</button>
@@ -688,18 +734,18 @@ function bindFilterPopup(){
   document.getElementById('filter-backdrop').onclick = (e)=>{ if(e.target.id==='filter-backdrop') close(); };
   document.getElementById('filter-close').onclick = close;
   document.getElementById('f-done').onclick = close;
-  document.getElementById('f-reset').onclick = ()=>{ state.wf = { genre:'', status:'', fav:false, minRating:'', location:'' }; render(); };
+  document.getElementById('f-reset').onclick = ()=>{ state.wf = { genre:'', status:'', fav:false, minRating:'', location:'', tag:'' }; render(); };
   document.getElementById('f-fav-tog').onclick = ()=>{ state.wf.fav = !state.wf.fav; render(); };
   const bind = (id,key)=>{
     const el = document.getElementById(id);
     el.onchange = ()=>{ state.wf[key] = el.value; render(); };
   };
-  bind('f-genre','genre'); bind('f-status','status'); bind('f-rating','minRating'); bind('f-loc','location');
+  bind('f-genre','genre'); bind('f-status','status'); bind('f-rating','minRating'); bind('f-loc','location'); bind('f-tag','tag');
 }
 
 function renderWatched(c){
   const list = filteredMovies();
-  const hasExtra = !!(state.wf.genre || state.wf.status || state.wf.fav || state.wf.minRating || state.wf.location);
+  const hasExtra = !!(state.wf.genre || state.wf.status || state.wf.fav || state.wf.minRating || state.wf.location || state.wf.tag);
   const reviewCount = state.movies.filter(m=>m.needsReview).length;
   c.innerHTML = `
     <div class="pillrow">
@@ -730,7 +776,7 @@ function renderWatched(c){
   c.querySelectorAll('[data-t]').forEach(p=>p.onclick=()=>{ state.typeFilter = p.dataset.t; render(); });
   c.querySelectorAll('[data-f]').forEach(p=>p.onclick=()=>{
     const f = p.dataset.f;
-    if(f==='all'){ state.watchedFilter = null; state.wf = { genre:'', status:'', fav:false, minRating:'', location:'' }; }
+    if(f==='all'){ state.watchedFilter = null; state.wf = { genre:'', status:'', fav:false, minRating:'', location:'', tag:'' }; }
     else { state.watchedFilter = (state.watchedFilter===f ? null : f); }
     render();
   });
@@ -952,54 +998,13 @@ function renderSettings(c){
     </div>
     <div class="settings-section">
       <h3>Appearance</h3>
-      <div class="hint" style="margin-bottom:10px;">Pick a look for the app. Applies instantly on this device.</div>
-      <div class="theme-grid">
-        ${[
-          {id:'paper', label:'Paper', swatch:['#f3efe6','#cf3f26','#18150f']},
-          {id:'midnight', label:'Midnight', swatch:['#14161f','#e3583f','#f2efe9']},
-          {id:'noir', label:'Noir', swatch:['#0b0b0c','#d4af37','#f1ede2']},
-          {id:'sepia', label:'Sepia', swatch:['#efe3ce','#a8461f','#3c2e20']},
-        ].map(t=>`
-        <button class="theme-swatch ${state.settings.theme===t.id?'active':''}" data-theme-pick="${t.id}">
-          <span class="swatch-preview" style="background:${t.swatch[0]};"><span style="background:${t.swatch[1]};"></span><span style="background:${t.swatch[2]};"></span></span>
-          <span>${t.label}</span>
-        </button>`).join('')}
-      </div>
+      <div class="hint" style="margin-bottom:10px;">Themes and look of the app.</div>
+      <button class="btn secondary block" id="goto-appearance">Open appearance →</button>
     </div>
     <div class="settings-section">
-      <h3>Low data mode</h3>
-      <div class="hint" style="margin-bottom:10px;">Loads smaller poster images to use less data — handy on mobile or a limited plan. A small quality trade-off, worth testing to see if it's noticeable.</div>
-      <div class="toggle-line" style="margin-bottom:0;">
-        <span>Low data mode</span>
-        <div class="switch ${state.settings.lowDataMode?'on':''}" id="tog-lowdata"></div>
-      </div>
-    </div>
-    <div class="settings-section">
-      <h3>App lock</h3>
-      <div class="hint" style="margin-bottom:10px;">The passcode is fixed for this app — same one on every device, baked in so reinstalling never loses it. This device stays unlocked until you log out.</div>
-      <button class="btn secondary block" id="logout-lock">Log out</button>
-    </div>
-    <div class="settings-section">
-      <h3>Cloud sync</h3>
-      ${fbReady ? `
-      <div class="hint" style="color:var(--teal);margin-bottom:10px;">Connected — your log syncs across every device you connect the same way.</div>
-      <div class="hint" style="color:var(--teal);margin-bottom:10px;">Connected automatically — your log syncs across every device that opens this app.</div>
-      ` : `
-      <div class="hint" style="margin-bottom:10px;">Couldn't connect to the sync database — check your internet connection.</div>
-      <button class="btn block" id="retry-fb">Retry connection</button>
-      `}
-    </div>
-    <div class="settings-section">
-      <h3>Default companion name</h3>
-      <div class="field"><input type="text" id="partner-label" placeholder="e.g. Hilda" value="${escapeHtml(state.settings.partnerLabel)}"/></div>
-      <div class="hint">The "Together" option now works with anyone — it pre-fills this name each time, but you can overwrite it per entry for a one-off watch with a friend or family member.</div>
-      <button class="btn" id="save-partner-label" style="margin-top:10px;">Save</button>
-    </div>
-    <div class="settings-section">
-      <h3>TMDB API key</h3>
-      <div class="field"><input type="text" id="tmdb-key" placeholder="Paste your TMDB v3 API key" value="${escapeHtml(state.settings.tmdbKey)}"/></div>
-      <div class="hint">Free at themoviedb.org → Settings → API. This powers poster, year and genre lookups.</div>
-      <button class="btn" id="save-key" style="margin-top:10px;">Save key</button>
+      <h3>Advanced</h3>
+      <div class="hint" style="margin-bottom:10px;">TMDB key, cloud sync, low data mode, and the default companion name.</div>
+      <button class="btn secondary block" id="goto-advanced">Open advanced settings →</button>
     </div>
     <div class="settings-section">
       <h3>Watch lists</h3>
@@ -1014,11 +1019,6 @@ function renderSettings(c){
       <h3>Batch import</h3>
       <div class="hint" style="margin-bottom:10px;">Paste a big list of titles at once — movies or TV shows — and each one gets looked up and added automatically.</div>
       <button class="btn secondary block" id="goto-prelogged">Open batch import →</button>
-    </div>
-    <div class="settings-section">
-      <h3>Refresh</h3>
-      <div class="hint" style="margin-bottom:10px;">If something looks out of date or stuck, reload the app fresh.</div>
-      <button class="btn secondary block" id="refresh-app">Refresh app</button>
     </div>
     <div class="settings-section">
       <h3>Clear all data</h3>
@@ -1041,44 +1041,25 @@ function renderSettings(c){
         It'll launch full-screen like a regular app, and your data stays saved between visits.
       </div>
     </div>
+    <div class="settings-section">
+      <h3>Refresh</h3>
+      <div class="hint" style="margin-bottom:10px;">If something looks out of date or stuck, reload the app fresh.</div>
+      <button class="btn secondary block" id="refresh-app">Refresh app</button>
+    </div>
+    <div class="settings-section">
+      <h3>App lock</h3>
+      <div class="hint" style="margin-bottom:10px;">The passcode is fixed for this app — same one on every device, baked in so reinstalling never loses it. This device stays unlocked until you log out.</div>
+      <button class="btn secondary block" id="logout-lock">Log out</button>
+    </div>
   `;
-  document.getElementById('save-key').onclick = async ()=>{
-    state.settings.tmdbKey = document.getElementById('tmdb-key').value.trim();
-    await sSet('settings', state.settings);
-    await tmdbGenres();
-    alert('Saved.');
-  };
-  document.getElementById('save-partner-label').onclick = async ()=>{
-    const val = document.getElementById('partner-label').value.trim();
-    state.settings.partnerLabel = val || 'Hilda';
-    await sSet('settings', state.settings);
-    render();
-  };
+  document.getElementById('goto-appearance').onclick = ()=>{ state.tab='appearancesettings'; render(); };
+  document.getElementById('goto-advanced').onclick = ()=>{ state.tab='advancedsettings'; render(); };
   document.getElementById('goto-prelogged').onclick = ()=>{ state.tab='prelogged'; render(); };
   document.getElementById('goto-review').onclick = ()=>{ state.tab='reviewqueue'; render(); };
-  c.querySelectorAll('[data-theme-pick]').forEach(b=>b.onclick=async ()=>{
-    state.settings.theme = b.dataset.themePick;
-    document.documentElement.setAttribute('data-theme', state.settings.theme);
-    applyThemeChrome(state.settings.theme);
-    try{ localStorage.setItem('reellog:themeCache', state.settings.theme); }catch(e){}
-    await sSet('settings', state.settings);
-    render();
-  });
-  if(document.getElementById('tog-lowdata')) document.getElementById('tog-lowdata').onclick = async ()=>{
-    state.settings.lowDataMode = !state.settings.lowDataMode;
-    await sSet('settings', state.settings);
-    render();
-  };
   if(document.getElementById('logout-lock')){
     document.getElementById('logout-lock').onclick = ()=>{
       localStorage.removeItem('reellog:unlocked');
       state.locked = true;
-      render();
-    };
-  }
-  if(document.getElementById('retry-fb')){
-    document.getElementById('retry-fb').onclick = ()=>{
-      initFirebase(DEFAULT_FIREBASE_CONFIG);
       render();
     };
   }
@@ -1129,14 +1110,104 @@ function renderSettings(c){
   });
 }
 
+function renderAppearanceSettings(c){
+  c.innerHTML = `
+    <button class="btn secondary" id="back-settings" style="margin-bottom:14px;">← Back to Settings</button>
+    <div class="settings-section">
+      <h3>Appearance</h3>
+      <div class="hint" style="margin-bottom:10px;">Pick a look for the app. Applies instantly on this device.</div>
+      <div class="theme-grid">
+        ${[
+          {id:'paper', label:'Paper', swatch:['#f3efe6','#cf3f26','#18150f']},
+          {id:'midnight', label:'Midnight', swatch:['#14161f','#e3583f','#f2efe9']},
+          {id:'noir', label:'Noir', swatch:['#0b0b0c','#d4af37','#f1ede2']},
+          {id:'sepia', label:'Sepia', swatch:['#efe3ce','#a8461f','#3c2e20']},
+        ].map(t=>`
+        <button class="theme-swatch ${state.settings.theme===t.id?'active':''}" data-theme-pick="${t.id}">
+          <span class="swatch-preview" style="background:${t.swatch[0]};"><span style="background:${t.swatch[1]};"></span><span style="background:${t.swatch[2]};"></span></span>
+          <span>${t.label}</span>
+        </button>`).join('')}
+      </div>
+    </div>
+  `;
+  document.getElementById('back-settings').onclick = ()=>{ state.tab='settings'; render(); };
+  c.querySelectorAll('[data-theme-pick]').forEach(b=>b.onclick=async ()=>{
+    state.settings.theme = b.dataset.themePick;
+    document.documentElement.setAttribute('data-theme', state.settings.theme);
+    applyThemeChrome(state.settings.theme);
+    try{ localStorage.setItem('reellog:themeCache', state.settings.theme); }catch(e){}
+    await sSet('settings', state.settings);
+    render();
+  });
+}
+
+function renderAdvancedSettings(c){
+  c.innerHTML = `
+    <button class="btn secondary" id="back-settings" style="margin-bottom:14px;">← Back to Settings</button>
+    <div class="settings-section">
+      <h3>Low data mode</h3>
+      <div class="hint" style="margin-bottom:10px;">Loads smaller poster images to use less data — handy on mobile or a limited plan. A small quality trade-off, worth testing to see if it's noticeable.</div>
+      <div class="toggle-line" style="margin-bottom:0;">
+        <span>Low data mode</span>
+        <div class="switch ${state.settings.lowDataMode?'on':''}" id="tog-lowdata"></div>
+      </div>
+    </div>
+    <div class="settings-section">
+      <h3>Cloud sync</h3>
+      ${fbReady ? `
+      <div class="hint" style="color:var(--teal);margin-bottom:10px;">Connected automatically — your log syncs across every device that opens this app.</div>
+      ` : `
+      <div class="hint" style="margin-bottom:10px;">Couldn't connect to the sync database — check your internet connection.</div>
+      <button class="btn block" id="retry-fb">Retry connection</button>
+      `}
+    </div>
+    <div class="settings-section">
+      <h3>Default companion name</h3>
+      <div class="field"><input type="text" id="partner-label" placeholder="e.g. Hilda" value="${escapeHtml(state.settings.partnerLabel)}"/></div>
+      <div class="hint">The "Together" option now works with anyone — it pre-fills this name each time, but you can overwrite it per entry for a one-off watch with a friend or family member.</div>
+      <button class="btn" id="save-partner-label" style="margin-top:10px;">Save</button>
+    </div>
+    <div class="settings-section">
+      <h3>TMDB API key</h3>
+      <div class="field"><input type="text" id="tmdb-key" placeholder="Paste your TMDB v3 API key" value="${escapeHtml(state.settings.tmdbKey)}"/></div>
+      <div class="hint">Free at themoviedb.org → Settings → API. This powers poster, year and genre lookups.</div>
+      <button class="btn" id="save-key" style="margin-top:10px;">Save key</button>
+    </div>
+  `;
+  document.getElementById('back-settings').onclick = ()=>{ state.tab='settings'; render(); };
+  document.getElementById('save-key').onclick = async ()=>{
+    state.settings.tmdbKey = document.getElementById('tmdb-key').value.trim();
+    await sSet('settings', state.settings);
+    await tmdbGenres();
+    alert('Saved.');
+  };
+  document.getElementById('save-partner-label').onclick = async ()=>{
+    const val = document.getElementById('partner-label').value.trim();
+    state.settings.partnerLabel = val || 'Hilda';
+    await sSet('settings', state.settings);
+    render();
+  };
+  if(document.getElementById('tog-lowdata')) document.getElementById('tog-lowdata').onclick = async ()=>{
+    state.settings.lowDataMode = !state.settings.lowDataMode;
+    await sSet('settings', state.settings);
+    render();
+  };
+  if(document.getElementById('retry-fb')){
+    document.getElementById('retry-fb').onclick = ()=>{
+      initFirebase(DEFAULT_FIREBASE_CONFIG);
+      render();
+    };
+  }
+}
+
 /* ---------------- BATCH IMPORT TAB ---------------- */
-let batchState = { withHilda:false, togetherName:'', dest:'watched', listId:null, running:false, log:[] };
+let batchState = { withHilda:false, togetherName:'', dest:'watched', listId:null, running:false, log:[], inputText:'' };
 function renderPrelogged(c){
   if(!batchState.listId && state.watchlists.length) batchState.listId = state.watchlists[0].id;
   c.innerHTML = `
     <button class="btn secondary" id="back-settings" style="margin-bottom:14px;">← Back to Settings</button>
     <div class="hint" style="margin-bottom:14px;">Paste a big list of titles below, one per line. Add a year in brackets if you know it, e.g. "Heat (1995)" — helps match the right one. Each line is looked up automatically and tagged as a movie or TV show for you. Everything lands straight in your log or watchlist — afterwards, use Select on the main screen to flag any shaky matches for review.</div>
-    <div class="field"><textarea id="batch-input" rows="8" placeholder="Heat (1995)&#10;The Wire&#10;Paris, Texas&#10;Fleabag"></textarea></div>
+    <div class="field"><textarea id="batch-input" rows="8" placeholder="Heat (1995)&#10;The Wire&#10;Paris, Texas&#10;Fleabag">${escapeHtml(batchState.inputText)}</textarea></div>
     <div class="field">
       <label>Add to</label>
       <div class="seg">
@@ -1158,6 +1229,7 @@ function renderPrelogged(c){
     ${batchState.log.length ? `<div class="settings-section" style="margin-top:16px;"><h3>Import results</h3>${batchState.log.map(l=>`<div class="listrow"><span>${l.ok?'✓':'⚑'} ${escapeHtml(l.line)}${l.ok?` — ${escapeHtml(l.title)} (${l.mediaType==='tv'?'TV':'Movie'})`:' — no match found, sent to review queue'}</span></div>`).join('')}</div>` : ''}
   `;
   document.getElementById('back-settings').onclick = ()=>{ state.tab='settings'; render(); };
+  document.getElementById('batch-input').oninput = (e)=>{ batchState.inputText = e.target.value; };
   c.querySelectorAll('[data-dest]').forEach(b=>b.onclick=()=>{ batchState.dest=b.dataset.dest; render(); });
   if(document.getElementById('batch-switch')) document.getElementById('batch-switch').onclick = ()=>{ batchState.withHilda=!batchState.withHilda; render(); };
   if(document.getElementById('batch-name')) document.getElementById('batch-name').oninput = (e)=>{ batchState.togetherName = e.target.value; };
@@ -1166,7 +1238,7 @@ function renderPrelogged(c){
 }
 
 async function runBatchImport(){
-  const lines = document.getElementById('batch-input').value.split('\n').map(l=>l.trim()).filter(Boolean);
+  const lines = batchState.inputText.split('\n').map(l=>l.trim()).filter(Boolean);
   if(!lines.length) return;
   if(!state.settings.tmdbKey){ alert('Add your TMDB API key in Settings first.'); return; }
   batchState.running = true; batchState.log = []; render();
@@ -1220,6 +1292,7 @@ async function runBatchImport(){
   await batchSaveMovies(newMovies);
   await sSet('watchlists', state.watchlists);
   batchState.running = false;
+  batchState.inputText = '';
   render();
 }
 
@@ -1357,19 +1430,20 @@ function openAddModal(existing, fromWatchlistItem, fromWatchlistId){
       watchedWith: existing.watchedWith==='hilda'||existing.watchedWith==='other' ? 'together' : (existing.watchedWith||'alone'),
       watchedWithOther: existing.watchedWithOther || (existing.watchedWith==='hilda' ? state.settings.partnerLabel : ''),
       location: existing.location||'', locationOther: existing.locationOther||'',
-      favorite: existing.favorite||false, tags: existing.tags||'',
+      favorite: existing.favorite||false, tags: normalizeTags(existing.tags),
       completed: existing.completed!==false, timeStopped: existing.timeStopped||'', sceneNote: existing.sceneNote||'',
       lastSeason: existing.lastSeason||'', lastEpisode: existing.lastEpisode||'',
-      ratingBailey: existing.ratingBailey||'', ratingHilda: existing.ratingHilda||'',
+      ratingBailey: existing.ratingBailey||0, ratingHilda: existing.ratingHilda||0,
       reviewBailey: existing.reviewBailey||'', reviewHilda: existing.reviewHilda||'',
+      notes: existing.notes||'',
       isRewatch: existing.isRewatch||false
     } : {
       preLogged:false, multiSession:false,
       startDate:new Date().toISOString().slice(0,10), startTime:new Date().toTimeString().slice(0,5),
       endDate:'', endTime:'',
       watchedWith:'alone', watchedWithOther:'', location:'', locationOther:'',
-      favorite:false, tags:'', completed:true, timeStopped:'', sceneNote:'', lastSeason:'', lastEpisode:'',
-      ratingBailey:'', ratingHilda:'', reviewBailey:'', reviewHilda:'', isRewatch:false
+      favorite:false, tags:[], completed:true, timeStopped:'', sceneNote:'', lastSeason:'', lastEpisode:'',
+      ratingBailey:0, ratingHilda:0, reviewBailey:'', reviewHilda:'', notes:'', isRewatch:false
     }
   };
   render();
@@ -1475,17 +1549,36 @@ function renderModal(){
       </div>
 
       <div class="field">
-        <label>Tags <span style="text-transform:none;color:var(--ink-soft);">(who picked it, occasion, etc.)</span></label>
-        <input type="text" id="f-tags" placeholder="e.g. Hilda picked, date night" value="${escapeHtml(f.tags)}"/>
+        <label>Tags <span style="font-size:10px;text-transform:none;color:var(--ink-soft);">(who picked it, occasion, etc.)</span></label>
+        <div class="tagbox" id="tagbox">
+          ${f.tags.map((t,i)=>`<span class="tagchip">${escapeHtml(t)}<button type="button" data-tagremove="${i}">×</button></span>`).join('')}
+          <input type="text" id="f-tag-input" placeholder="${f.tags.length?'Add another…':'e.g. Hilda picked, date night'}"/>
+        </div>
+        <div class="tag-suggest" id="tag-suggest"></div>
       </div>
 
-      <div class="row2">
-        <div class="field"><label>Your rating (0–10)</label><input type="number" id="f-rating-b" min="0" max="10" step="0.5" value="${f.ratingBailey}"/></div>
-        <div class="field"><label>${escapeHtml(state.settings.partnerLabel)}'s rating (0–10)</label><input type="number" id="f-rating-h" min="0" max="10" step="0.5" value="${f.ratingHilda}"/></div>
+      <div class="field">
+        <label>Your rating</label>
+        <div class="starrating" data-person="bailey">
+          <div class="starrow">${starsHtml(f.ratingBailey)}</div>
+          <span class="starnum">${f.ratingBailey||0}/10</span>
+        </div>
+        <textarea id="f-review-b" rows="3" placeholder="Your review">${escapeHtml(f.reviewBailey)}</textarea>
       </div>
 
-      <div class="field"><label>Your review</label><textarea id="f-review-b" rows="3" placeholder="What did you think?">${escapeHtml(f.reviewBailey)}</textarea></div>
-      <div class="field"><label>${escapeHtml(state.settings.partnerLabel)}'s review</label><textarea id="f-review-h" rows="3" placeholder="What did they think?">${escapeHtml(f.reviewHilda)}</textarea></div>
+      <div class="field">
+        <label>${escapeHtml(state.settings.partnerLabel)}'s rating</label>
+        <div class="starrating" data-person="hilda">
+          <div class="starrow">${starsHtml(f.ratingHilda)}</div>
+          <span class="starnum">${f.ratingHilda||0}/10</span>
+        </div>
+        <textarea id="f-review-h" rows="3" placeholder="${escapeHtml(state.settings.partnerLabel)}'s review">${escapeHtml(f.reviewHilda)}</textarea>
+      </div>
+
+      <div class="field">
+        <label>Notes</label>
+        <textarea id="f-notes" rows="3" placeholder="Anything else worth remembering">${escapeHtml(f.notes)}</textarea>
+      </div>
 
       ${!m.editingId && dupe ? `
       <div class="toggle-line">
@@ -1558,6 +1651,50 @@ function bindModal(){
   });
   document.querySelectorAll('[data-loc]').forEach(b=>b.onclick=()=>{ f.location = f.location===b.dataset.loc? '' : b.dataset.loc; render(); });
 
+  // tag chips
+  if(q('tagbox')){
+    const tagInput = q('f-tag-input');
+    q('tagbox').querySelectorAll('[data-tagremove]').forEach(b=>b.onclick=()=>{
+      f.tags.splice(Number(b.dataset.tagremove), 1);
+      render();
+    });
+    const commitTag = (val)=>{
+      val = val.trim().replace(/,$/,'').trim();
+      if(val && !f.tags.includes(val)) f.tags.push(val);
+      tagInput.value='';
+      render();
+    };
+    tagInput.oninput = ()=>{
+      const val = tagInput.value.trim();
+      const box = q('tag-suggest');
+      if(val.includes(',')){ commitTag(val); return; }
+      if(!val){ box.innerHTML=''; return; }
+      const matches = allTags().filter(t=>t.toLowerCase().includes(val.toLowerCase()) && !f.tags.includes(t)).slice(0,6);
+      box.innerHTML = matches.map(t=>`<button type="button" data-tagpick="${escapeHtml(t)}">${escapeHtml(t)}</button>`).join('');
+      box.querySelectorAll('[data-tagpick]').forEach(b=>b.onclick=()=>commitTag(b.dataset.tagpick));
+    };
+    tagInput.onkeydown = (e)=>{
+      if(e.key==='Enter'){ e.preventDefault(); if(tagInput.value.trim()) commitTag(tagInput.value); }
+      if(e.key==='Backspace' && !tagInput.value && f.tags.length){ f.tags.pop(); render(); }
+    };
+  }
+
+  // star ratings
+  document.querySelectorAll('.starrating').forEach(container=>{
+    const person = container.dataset.person;
+    container.querySelectorAll('.star').forEach(starEl=>{
+      starEl.onclick = (e)=>{
+        const rect = starEl.getBoundingClientRect();
+        const isLeftHalf = (e.clientX - rect.left) < rect.width/2;
+        const i = Number(starEl.dataset.star);
+        const value = isLeftHalf ? i*2-1 : i*2;
+        if(person==='bailey') f.ratingBailey = (f.ratingBailey===value ? 0 : value);
+        else f.ratingHilda = (f.ratingHilda===value ? 0 : value);
+        render();
+      };
+    });
+  });
+
   if(q('save-entry')) q('save-entry').onclick = async ()=>{
     if(q('f-startdate')) f.startDate = q('f-startdate').value;
     if(q('f-starttime')) f.startTime = q('f-starttime').value;
@@ -1565,13 +1702,11 @@ function bindModal(){
     if(q('f-endtime')) f.endTime = q('f-endtime').value;
     if(q('f-ww-other')) f.watchedWithOther = q('f-ww-other').value;
     if(q('f-loc-other')) f.locationOther = q('f-loc-other').value;
-    if(q('f-tags')) f.tags = q('f-tags').value;
+    if(q('f-notes')) f.notes = q('f-notes').value;
     if(q('f-timestopped')) f.timeStopped = q('f-timestopped').value;
     if(q('f-scenenote')) f.sceneNote = q('f-scenenote').value;
     if(q('f-lastseason')) f.lastSeason = q('f-lastseason').value ? Number(q('f-lastseason').value) : null;
     if(q('f-lastepisode')) f.lastEpisode = q('f-lastepisode').value ? Number(q('f-lastepisode').value) : null;
-    if(q('f-rating-b')) f.ratingBailey = q('f-rating-b').value ? Number(q('f-rating-b').value) : null;
-    if(q('f-rating-h')) f.ratingHilda = q('f-rating-h').value ? Number(q('f-rating-h').value) : null;
     if(q('f-review-b')) f.reviewBailey = q('f-review-b').value;
     if(q('f-review-h')) f.reviewHilda = q('f-review-h').value;
 
@@ -1608,6 +1743,7 @@ function bindModal(){
       lastEpisode: completed ? null : f.lastEpisode,
       ratingBailey: f.ratingBailey, ratingHilda: f.ratingHilda,
       reviewBailey: f.reviewBailey, reviewHilda: f.reviewHilda,
+      notes: f.notes,
       isRewatch: !!(isRewatch || (dupe && !state.modal.editingId)),
       needsReview: false
     };
