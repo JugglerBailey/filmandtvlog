@@ -183,9 +183,10 @@ let state = {
   tab: 'watched',
   movies: [],           // logged/watched entries
   watchlists: [],        // [{id,name,items:[]}]
-  settings: { tmdbKey:'', genreMap:{}, partnerLabel:'With Hilda' },
+  settings: { tmdbKey:'', genreMapMovie:{}, genreMapTv:{}, partnerLabel:'With Hilda' },
   loaded: false,
   watchedFilter: null,   // null | 'hilda' | 'alone'
+  typeFilter: 'all',     // all | movie | tv
   wf: { genre:'', status:'', fav:false, minRating:'', location:'' },
   wlActive: null,
   modal: null,            // {type:'add', prefill, editingId, fromWatchlist}
@@ -196,8 +197,10 @@ function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(
 async function loadAll(){
   state.movies = await sGet('movies', []);
   state.watchlists = await sGet('watchlists', []);
-  state.settings = await sGet('settings', { tmdbKey:'', genreMap:{}, partnerLabel:'With Hilda' });
+  state.settings = await sGet('settings', { tmdbKey:'', genreMapMovie:{}, genreMapTv:{}, partnerLabel:'With Hilda' });
   if(!state.settings.partnerLabel) state.settings.partnerLabel = 'With Hilda';
+  if(!state.settings.genreMapMovie) state.settings.genreMapMovie = state.settings.genreMap || {};
+  if(!state.settings.genreMapTv) state.settings.genreMapTv = {};
   if(state.watchlists.length===0){
     state.watchlists.push({id:uid(), name:'Want to Watch', items:[]});
   }
@@ -208,28 +211,54 @@ async function loadAll(){
 
 /* ---------------- TMDB ---------------- */
 const IMG = 'https://image.tmdb.org/t/p/w342';
-async function tmdbSearch(q){
+async function tmdbSearch(q, mediaType){
   if(!state.settings.tmdbKey) return {error:'nokey'};
+  const endpoint = mediaType==='tv' ? 'tv' : 'movie';
   try{
-    const res = await fetch(`https://api.themoviedb.org/3/search/movie?api_key=${state.settings.tmdbKey}&query=${encodeURIComponent(q)}`);
+    const res = await fetch(`https://api.themoviedb.org/3/search/${endpoint}?api_key=${state.settings.tmdbKey}&query=${encodeURIComponent(q)}`);
     const d = await res.json();
     if(d.status_code) return {error:'api', message:d.status_message};
-    return {results:d.results||[]};
+    return {results:(d.results||[]).map(r=>normalizeResult(r, endpoint))};
   }catch(e){ return {error:'network'}; }
+}
+async function tmdbSearchMulti(q){
+  if(!state.settings.tmdbKey) return {error:'nokey'};
+  try{
+    const res = await fetch(`https://api.themoviedb.org/3/search/multi?api_key=${state.settings.tmdbKey}&query=${encodeURIComponent(q)}`);
+    const d = await res.json();
+    if(d.status_code) return {error:'api', message:d.status_message};
+    const results = (d.results||[]).filter(r=>r.media_type==='movie'||r.media_type==='tv').map(r=>normalizeResult(r, r.media_type));
+    return {results};
+  }catch(e){ return {error:'network'}; }
+}
+function normalizeResult(r, mediaType){
+  return {
+    id: r.id, mediaType,
+    title: mediaType==='tv' ? r.name : r.title,
+    year: (mediaType==='tv' ? r.first_air_date : r.release_date) ? (mediaType==='tv'?r.first_air_date:r.release_date).slice(0,4) : '',
+    poster: r.poster_path ? IMG+r.poster_path : '',
+    genreIds: r.genre_ids || []
+  };
 }
 async function tmdbGenres(){
   if(!state.settings.tmdbKey) return;
   try{
-    const res = await fetch(`https://api.themoviedb.org/3/genre/movie/list?api_key=${state.settings.tmdbKey}`);
-    const d = await res.json();
-    const map = {};
-    (d.genres||[]).forEach(g=>map[g.id]=g.name);
-    state.settings.genreMap = map;
+    const [mRes, tRes] = await Promise.all([
+      fetch(`https://api.themoviedb.org/3/genre/movie/list?api_key=${state.settings.tmdbKey}`),
+      fetch(`https://api.themoviedb.org/3/genre/tv/list?api_key=${state.settings.tmdbKey}`)
+    ]);
+    const md = await mRes.json(), td = await tRes.json();
+    const mMap = {}, tMap = {};
+    (md.genres||[]).forEach(g=>mMap[g.id]=g.name);
+    (td.genres||[]).forEach(g=>tMap[g.id]=g.name);
+    state.settings.genreMapMovie = mMap;
+    state.settings.genreMapTv = tMap;
     await sSet('settings', state.settings);
   }catch(e){}
 }
-function genreNames(ids){
-  return (ids||[]).map(id=>state.settings.genreMap[id]).filter(Boolean);
+function genreNames(ids, mediaType){
+  const map = mediaType==='tv' ? state.settings.genreMapTv : state.settings.genreMapMovie;
+  return (ids||[]).map(id=>map[id]).filter(Boolean);
 }
 
 /* ---------------- icons ---------------- */
@@ -280,18 +309,19 @@ function renderContent(){
 
 function filteredMovies(){
   let list = [...state.movies];
+  if(state.typeFilter!=='all') list = list.filter(m=>(m.mediaType||'movie')===state.typeFilter);
   if(state.watchedFilter==='hilda') list = list.filter(m=>m.watchedWith==='hilda');
   if(state.watchedFilter==='alone') list = list.filter(m=>m.watchedWith==='alone');
   if(state.wf.genre) list = list.filter(m=>(m.genres||[]).includes(state.wf.genre));
-  if(state.wf.status==='partial') list = list.filter(m=>m.partial);
-  if(state.wf.status==='complete') list = list.filter(m=>!m.partial);
+  if(state.wf.status==='partial') list = list.filter(m=>!m.completed);
+  if(state.wf.status==='complete') list = list.filter(m=>m.completed);
   if(state.wf.fav) list = list.filter(m=>m.favorite);
   if(state.wf.minRating) list = list.filter(m=>{
     const r = Math.max(m.ratingBailey||0, m.ratingHilda||0);
     return r >= Number(state.wf.minRating);
   });
   if(state.wf.location) list = list.filter(m=>m.location===state.wf.location);
-  list.sort((a,b)=>(b.dateWatched||'0')<(a.dateWatched||'0')?-1:1);
+  list.sort((a,b)=>(b.startDate||'0')<(a.startDate||'0')?-1:1);
   return list;
 }
 
@@ -300,6 +330,11 @@ function renderWatched(c){
   const list = filteredMovies();
   const showPanel = state.watchedFilter!==null;
   c.innerHTML = `
+    <div class="pillrow">
+      <button class="pill ${state.typeFilter==='all'?'active':''}" data-t="all">All Types</button>
+      <button class="pill ${state.typeFilter==='movie'?'active':''}" data-t="movie">Movies</button>
+      <button class="pill ${state.typeFilter==='tv'?'active':''}" data-t="tv">TV Shows</button>
+    </div>
     <div class="pillrow">
       <button class="pill ${state.watchedFilter===null?'active':''}" data-f="all">All</button>
       <button class="pill ${state.watchedFilter==='hilda'?'active':''}" data-f="hilda">${escapeHtml(state.settings.partnerLabel)}</button>
@@ -316,7 +351,7 @@ function renderWatched(c){
         <select id="f-status">
           <option value="" ${!state.wf.status?'selected':''}>Any status</option>
           <option value="complete" ${state.wf.status==='complete'?'selected':''}>Complete</option>
-          <option value="partial" ${state.wf.status==='partial'?'selected':''}>Partially watched</option>
+          <option value="partial" ${state.wf.status==='partial'?'selected':''}>Still in progress</option>
         </select>
       </div>
       <div class="filterrow">
@@ -335,10 +370,11 @@ function renderWatched(c){
         </select>
       </div>
     </div>` : ''}
-    ${list.length===0 ? `<div class="empty"><b>Nothing here yet</b>Tap + Log to add the first film.</div>` :
+    ${list.length===0 ? `<div class="empty"><b>Nothing here yet</b>Tap + Log to add the first title.</div>` :
       `<div class="grid">${list.map(m=>movieCard(m)).join('')}</div>`}
   `;
-  c.querySelectorAll('.pill').forEach(p=>p.onclick=()=>{
+  c.querySelectorAll('[data-t]').forEach(p=>p.onclick=()=>{ state.typeFilter = p.dataset.t; render(); });
+  c.querySelectorAll('[data-f]').forEach(p=>p.onclick=()=>{
     const f = p.dataset.f;
     state.watchedFilter = f==='all' ? null : (state.watchedFilter===f ? null : f);
     render();
@@ -354,16 +390,29 @@ function renderWatched(c){
   c.querySelectorAll('[data-open]').forEach(card=>card.onclick=()=>openAddModal(state.movies.find(m=>m.id===card.dataset.open)));
 }
 
+function fmtDate(d){ return d ? new Date(d+'T00:00').toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'}) : ''; }
+
 function movieCard(m){
   const withTag = m.watchedWith==='hilda' ? `<span class="tag hilda">${escapeHtml(state.settings.partnerLabel)}</span>` : m.watchedWith==='alone' ? `<span class="tag">Watched alone</span>` : m.watchedWith==='other' ? `<span class="tag">${escapeHtml(m.watchedWithOther||'Other')}</span>` : '';
-  const dateStr = m.preLogged ? 'Pre-logged' : (m.dateWatched ? new Date(m.dateWatched+(m.timeWatched?'T'+m.timeWatched:'T00:00')).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'}) : '');
-  const marks = [m.partial?'<span class="tag mark">Partial</span>':'', m.isRewatch?'<span class="tag mark">Rewatch</span>':'', m.favorite?'<span class="tag mark">★ Favorite</span>':''].filter(Boolean);
+  let dateStr = m.preLogged ? 'Pre-logged' : '';
+  if(!m.preLogged){
+    if(m.startDate && m.endDate && m.startDate!==m.endDate) dateStr = `${fmtDate(m.startDate)} → ${fmtDate(m.endDate)}`;
+    else if(m.startDate) dateStr = fmtDate(m.startDate);
+  }
+  let progress = '';
+  if(!m.completed && !m.preLogged){
+    if(m.mediaType==='tv' && (m.lastSeason||m.lastEpisode)) progress = `<span class="tag mark">Up to S${m.lastSeason||1}E${m.lastEpisode||1}</span>`;
+    else if(m.timeStopped) progress = `<span class="tag mark">Stopped at ${escapeHtml(m.timeStopped)}</span>`;
+    else progress = `<span class="tag mark">In progress</span>`;
+  }
+  const marks = [progress, m.isRewatch?'<span class="tag mark">Rewatch</span>':'', m.favorite?'<span class="tag mark">★ Favorite</span>':''].filter(Boolean);
+  const typeTag = m.mediaType==='tv' ? '<span class="tag">TV</span>' : '';
   return `
   <div class="gridcard" data-open="${m.id}">
     <div class="poster">${m.poster ? `<img src="${m.poster}"/>` : `<div class="noimg">🎬</div>`}</div>
     <div class="cap">
       <h3>${escapeHtml(m.title)} ${m.year?`<em>'${String(m.year).slice(2)}</em>`:''}</h3>
-      <div class="meta">${dateStr}${withTag?' · '+withTag:''}${marks.length?' · '+marks.join(' · '):''}</div>
+      <div class="meta">${[typeTag,dateStr,withTag].filter(Boolean).join(' · ')}${marks.length?' · '+marks.join(' · '):''}</div>
       ${(m.ratingBailey||m.ratingHilda) ? `<div class="ratings">${m.ratingBailey?`You <b>${m.ratingBailey}</b>`:''}${m.ratingHilda?`${m.ratingBailey?' · ':''}Hilda <b>${m.ratingHilda}</b>`:''}</div>` : ''}
     </div>
   </div>`;
@@ -372,11 +421,16 @@ function movieCard(m){
 function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 /* ---------------- WATCHLIST TAB ---------------- */
+let wlQuickType = 'movie';
 function renderWatchlist(c){
   const active = state.watchlists.find(l=>l.id===state.wlActive) || state.watchlists[0];
   c.innerHTML = `
+    <div class="seg" style="margin-bottom:8px;">
+      <button class="seg-btn ${wlQuickType==='movie'?'active':''}" data-qt="movie">Movie</button>
+      <button class="seg-btn ${wlQuickType==='tv'?'active':''}" data-qt="tv">TV Show</button>
+    </div>
     <div class="quickadd">
-      <input type="text" id="wl-quick" placeholder="Add a film to this list…"/>
+      <input type="text" id="wl-quick" placeholder="Add a title to this list…"/>
       <button class="btn" id="wl-quick-btn">Add</button>
     </div>
     <div class="wl-tabs">
@@ -389,7 +443,7 @@ function renderWatchlist(c){
         <div class="poster">${it.poster?`<img src="${it.poster}"/>`:`<div class="noimg">🎬</div>`}</div>
         <div class="cap">
           <h3>${escapeHtml(it.title)} ${it.year?`<em>'${String(it.year).slice(2)}</em>`:''}</h3>
-          <div class="meta">${(it.genres||[]).slice(0,2).join(' · ')}</div>
+          <div class="meta">${[it.mediaType==='tv'?'TV':'', (it.genres||[]).slice(0,2).join(' · ')].filter(Boolean).join(' · ')}</div>
           <div class="actions">
             <button class="btn" data-watch="${it.id}" style="padding:8px 10px;font-size:10px;">Mark watched</button>
             <button class="btn secondary" data-remove="${it.id}" style="padding:8px 10px;font-size:10px;">Remove</button>
@@ -399,6 +453,7 @@ function renderWatchlist(c){
   `;
   document.getElementById('wl-quick-btn').onclick = ()=>quickAddToWatchlist(active.id);
   document.getElementById('wl-quick').onkeydown = (e)=>{ if(e.key==='Enter') quickAddToWatchlist(active.id); };
+  c.querySelectorAll('[data-qt]').forEach(b=>b.onclick=()=>{ wlQuickType=b.dataset.qt; render(); });
   document.getElementById('wl-new').onclick = async ()=>{
     const name = prompt('New list name:');
     if(name){ state.watchlists.push({id:uid(),name,items:[]}); state.wlActive = state.watchlists[state.watchlists.length-1].id; await sSet('watchlists',state.watchlists); render(); }
@@ -419,11 +474,11 @@ async function quickAddToWatchlist(listId){
   const q = input.value.trim();
   if(!q) return;
   if(!state.settings.tmdbKey){ alert('Add your TMDB API key in Settings first so posters can be fetched.'); return; }
-  const res = await tmdbSearch(q);
+  const res = await tmdbSearch(q, wlQuickType);
   if(res.error || !res.results.length){ alert('No matches found — you can still search again or check the title.'); return; }
   const top = res.results[0];
   const list = state.watchlists.find(l=>l.id===listId);
-  list.items.push({ id:uid(), tmdbId:top.id, title:top.title, year: top.release_date? top.release_date.slice(0,4):'', poster: top.poster_path? IMG+top.poster_path:'', genres: genreNames(top.genre_ids) });
+  list.items.push({ id:uid(), tmdbId:top.id, mediaType:wlQuickType, title:top.title, year:top.year, poster:top.poster, genres: genreNames(top.genreIds, wlQuickType) });
   await sSet('watchlists', state.watchlists);
   input.value='';
   render();
@@ -465,9 +520,9 @@ function renderSettings(c){
       ${state.watchlists.map(l=>`<div class="listrow"><span>${escapeHtml(l.name)} (${l.items.length})</span><span><button class="iconbtn" data-rename="${l.id}">Rename</button>${state.watchlists.length>1?`<button class="iconbtn" data-dellist="${l.id}">Delete</button>`:''}</span></div>`).join('')}
     </div>
     <div class="settings-section">
-      <h3>Pre-logged movies</h3>
-      <div class="hint" style="margin-bottom:10px;">Batch-add films you watched before you started using this log — no date or time needed.</div>
-      <button class="btn secondary block" id="goto-prelogged">Open pre-logged entry →</button>
+      <h3>Batch import</h3>
+      <div class="hint" style="margin-bottom:10px;">Paste a big list of titles at once — movies or TV shows — and each one gets looked up and added automatically.</div>
+      <button class="btn secondary block" id="goto-prelogged">Open batch import →</button>
     </div>
     <div class="settings-section">
       <h3>Backup</h3>
@@ -565,71 +620,106 @@ function renderSettings(c){
   });
 }
 
-/* ---------------- PRE-LOGGED TAB ---------------- */
-let prelogBatchWithHilda = false;
+/* ---------------- BATCH IMPORT TAB ---------------- */
+let batchState = { withHilda:false, dest:'watched', listId:null, running:false, log:[] };
 function renderPrelogged(c){
-  const recent = state.movies.filter(m=>m.preLogged).slice(-8).reverse();
+  if(!batchState.listId && state.watchlists.length) batchState.listId = state.watchlists[0].id;
   c.innerHTML = `
     <button class="btn secondary" id="back-settings" style="margin-bottom:14px;">← Back to Settings</button>
+    <div class="hint" style="margin-bottom:14px;">Paste a big list of titles below, one per line. Add a year in brackets if you know it, e.g. "Heat (1995)" — helps match the right one. Each line is looked up automatically and tagged as a movie or TV show for you.</div>
+    <div class="field"><textarea id="batch-input" rows="8" placeholder="Heat (1995)&#10;The Wire&#10;Paris, Texas&#10;Fleabag"></textarea></div>
+    <div class="field">
+      <label>Add to</label>
+      <div class="seg">
+        <button class="seg-btn ${batchState.dest==='watched'?'active':''}" data-dest="watched">Watched log (pre-logged)</button>
+        <button class="seg-btn ${batchState.dest==='watchlist'?'active':''}" data-dest="watchlist">Watchlist</button>
+      </div>
+    </div>
+    ${batchState.dest==='watchlist' ? `
+    <div class="field">
+      <label>Which list</label>
+      <select id="batch-listid">${state.watchlists.map(l=>`<option value="${l.id}" ${l.id===batchState.listId?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}</select>
+    </div>` : `
     <div class="toggle-line">
       <span>${escapeHtml(state.settings.partnerLabel)}</span>
-      <div class="switch ${prelogBatchWithHilda?'on':''}" id="pl-switch"></div>
-    </div>
-    <div class="quickadd">
-      <input type="text" id="pl-input" placeholder="Type a title and press Add…"/>
-      <button class="btn" id="pl-add">Add</button>
-    </div>
-    <div class="hint" style="margin-bottom:14px;">Each title is looked up automatically and saved right away, marked as pre-logged with no date.</div>
-    ${recent.length ? `<div class="settings-section"><h3>Recently added</h3>${recent.map(m=>`<div class="listrow"><span>${escapeHtml(m.title)} ${m.year?`(${m.year})`:''}</span></div>`).join('')}</div>` : ''}
+      <div class="switch ${batchState.withHilda?'on':''}" id="batch-switch"></div>
+    </div>`}
+    <button class="btn block" id="batch-run" ${batchState.running?'disabled':''}>${batchState.running?'Importing…':'Import list'}</button>
+    ${batchState.log.length ? `<div class="settings-section" style="margin-top:16px;"><h3>Import results</h3>${batchState.log.map(l=>`<div class="listrow"><span>${l.ok?'✓':'✕'} ${escapeHtml(l.line)}${l.ok?` — ${escapeHtml(l.title)} (${l.mediaType==='tv'?'TV':'Movie'})`:' — no match found'}</span></div>`).join('')}</div>` : ''}
   `;
   document.getElementById('back-settings').onclick = ()=>{ state.tab='settings'; render(); };
-  document.getElementById('pl-switch').onclick = ()=>{ prelogBatchWithHilda = !prelogBatchWithHilda; render(); };
-  const doAdd = async ()=>{
-    const input = document.getElementById('pl-input');
-    const q = input.value.trim();
-    if(!q) return;
-    if(!state.settings.tmdbKey){ alert('Add your TMDB API key in Settings first.'); return; }
-    const res = await tmdbSearch(q);
-    if(res.error || !res.results.length){ alert('No match found for "'+q+'".'); return; }
-    const top = res.results[0];
-    const dupe = state.movies.find(m=>m.tmdbId===top.id);
-    state.movies.push({
-      id:uid(), tmdbId:top.id, title:top.title, year: top.release_date?top.release_date.slice(0,4):'',
-      poster: top.poster_path?IMG+top.poster_path:'', genres: genreNames(top.genre_ids),
-      preLogged:true, dateWatched:null, timeWatched:null,
-      watchedWith: prelogBatchWithHilda?'hilda':'alone',
-      isRewatch: !!dupe, favorite:false, partial:false, tags:'',
-      ratingBailey:null, ratingHilda:null, location:'', locationOther:''
-    });
-    await sSet('movies', state.movies);
-    input.value=''; input.focus();
+  c.querySelectorAll('[data-dest]').forEach(b=>b.onclick=()=>{ batchState.dest=b.dataset.dest; render(); });
+  if(document.getElementById('batch-switch')) document.getElementById('batch-switch').onclick = ()=>{ batchState.withHilda=!batchState.withHilda; render(); };
+  if(document.getElementById('batch-listid')) document.getElementById('batch-listid').onchange = (e)=>{ batchState.listId = e.target.value; };
+  document.getElementById('batch-run').onclick = runBatchImport;
+}
+
+async function runBatchImport(){
+  const lines = document.getElementById('batch-input').value.split('\n').map(l=>l.trim()).filter(Boolean);
+  if(!lines.length) return;
+  if(!state.settings.tmdbKey){ alert('Add your TMDB API key in Settings first.'); return; }
+  batchState.running = true; batchState.log = []; render();
+  for(const line of lines){
+    const yearMatch = line.match(/\((\d{4})\)/);
+    const cleanQuery = line.replace(/\(\d{4}\)/,'').trim();
+    const res = await tmdbSearchMulti(cleanQuery);
+    let pick = null;
+    if(!res.error && res.results.length){
+      pick = yearMatch ? (res.results.find(r=>r.year===yearMatch[1]) || res.results[0]) : res.results[0];
+    }
+    if(pick){
+      if(batchState.dest==='watchlist'){
+        const list = state.watchlists.find(l=>l.id===batchState.listId);
+        if(list) list.items.push({ id:uid(), tmdbId:pick.id, mediaType:pick.mediaType, title:pick.title, year:pick.year, poster:pick.poster, genres:genreNames(pick.genreIds,pick.mediaType) });
+      } else {
+        const dupe = state.movies.find(m=>m.tmdbId===pick.id && m.mediaType===pick.mediaType);
+        state.movies.push({
+          id:uid(), tmdbId:pick.id, mediaType:pick.mediaType, title:pick.title, year:pick.year, poster:pick.poster, genres:genreNames(pick.genreIds,pick.mediaType),
+          preLogged:true, startDate:null, startTime:null, endDate:null, endTime:null,
+          watchedWith: batchState.withHilda?'hilda':'alone', watchedWithOther:'',
+          isRewatch: !!dupe, favorite:false, completed:true, timeStopped:'', sceneNote:'', lastSeason:null, lastEpisode:null,
+          tags:'', ratingBailey:null, ratingHilda:null, location:'', locationOther:''
+        });
+      }
+      batchState.log.push({line, ok:true, title:pick.title, mediaType:pick.mediaType});
+    } else {
+      batchState.log.push({line, ok:false});
+    }
     render();
-  };
-  document.getElementById('pl-add').onclick = doAdd;
-  document.getElementById('pl-input').onkeydown = (e)=>{ if(e.key==='Enter') doAdd(); };
+  }
+  await sSet('movies', state.movies);
+  await sSet('watchlists', state.watchlists);
+  batchState.running = false;
+  render();
 }
 
 /* ---------------- ADD/EDIT MOVIE MODAL ---------------- */
+let addModalType = 'movie';
 function openAddModal(existing, fromWatchlistItem, fromWatchlistId){
+  addModalType = existing ? (existing.mediaType||'movie') : fromWatchlistItem ? (fromWatchlistItem.mediaType||'movie') : 'movie';
   state.modal = {
     editingId: existing? existing.id : null,
-    selected: existing ? { id:existing.tmdbId, title:existing.title, year:existing.year, poster:existing.poster, genres:existing.genres } :
-               fromWatchlistItem ? { id:fromWatchlistItem.tmdbId, title:fromWatchlistItem.title, year:fromWatchlistItem.year, poster:fromWatchlistItem.poster, genres:fromWatchlistItem.genres } : null,
+    selected: existing ? { id:existing.tmdbId, mediaType:existing.mediaType||'movie', title:existing.title, year:existing.year, poster:existing.poster, genres:existing.genres } :
+               fromWatchlistItem ? { id:fromWatchlistItem.tmdbId, mediaType:fromWatchlistItem.mediaType||'movie', title:fromWatchlistItem.title, year:fromWatchlistItem.year, poster:fromWatchlistItem.poster, genres:fromWatchlistItem.genres } : null,
     fromWatchlistId: fromWatchlistId || null,
     fromWatchlistItemId: fromWatchlistItem ? fromWatchlistItem.id : null,
-    searchResults: [],
     form: existing ? {
-      preLogged: existing.preLogged, dateWatched: existing.dateWatched||'', timeWatched: existing.timeWatched||'',
+      preLogged: existing.preLogged, multiSession: !!(existing.startDate && existing.endDate && existing.startDate!==existing.endDate) || (!existing.completed && !existing.preLogged),
+      startDate: existing.startDate||new Date().toISOString().slice(0,10), startTime: existing.startTime||'',
+      endDate: existing.endDate||'', endTime: existing.endTime||'',
       watchedWith: existing.watchedWith||'alone', watchedWithOther: existing.watchedWithOther||'',
       location: existing.location||'', locationOther: existing.locationOther||'',
       favorite: existing.favorite||false, tags: existing.tags||'',
-      partial: existing.partial||false, timeStopped: existing.timeStopped||'', sceneNote: existing.sceneNote||'',
+      completed: existing.completed!==false, timeStopped: existing.timeStopped||'', sceneNote: existing.sceneNote||'',
+      lastSeason: existing.lastSeason||'', lastEpisode: existing.lastEpisode||'',
       ratingBailey: existing.ratingBailey||'', ratingHilda: existing.ratingHilda||'',
       isRewatch: existing.isRewatch||false
     } : {
-      preLogged:false, dateWatched:new Date().toISOString().slice(0,10), timeWatched:new Date().toTimeString().slice(0,5),
+      preLogged:false, multiSession:false,
+      startDate:new Date().toISOString().slice(0,10), startTime:new Date().toTimeString().slice(0,5),
+      endDate:'', endTime:'',
       watchedWith:'alone', watchedWithOther:'', location:'', locationOther:'',
-      favorite:false, tags:'', partial:false, timeStopped:'', sceneNote:'',
+      favorite:false, tags:'', completed:true, timeStopped:'', sceneNote:'', lastSeason:'', lastEpisode:'',
       ratingBailey:'', ratingHilda:'', isRewatch:false
     }
   };
@@ -639,25 +729,33 @@ function openAddModal(existing, fromWatchlistItem, fromWatchlistId){
 function renderModal(){
   const m = state.modal;
   const f = m.form;
-  const dupe = m.selected ? state.movies.find(mv=>mv.tmdbId===m.selected.id && mv.id!==m.editingId) : null;
+  const dupe = m.selected ? state.movies.find(mv=>mv.tmdbId===m.selected.id && mv.mediaType===m.selected.mediaType && mv.id!==m.editingId) : null;
+  const isTv = m.selected ? m.selected.mediaType==='tv' : addModalType==='tv';
   return `
   <div class="modal-backdrop" id="modal-backdrop">
     <div class="modal" style="position:relative;">
       <button class="modal-close" id="modal-close">✕</button>
-      <h2>${m.editingId? 'Edit entry' : 'Log a film'}</h2>
+      <h2>${m.editingId? 'Edit entry' : 'Log a title'}</h2>
 
       ${!m.selected ? `
       <div class="field">
+        <label>Type</label>
+        <div class="seg">
+          <button class="seg-btn ${addModalType==='movie'?'active':''}" data-mt="movie">Movie</button>
+          <button class="seg-btn ${addModalType==='tv'?'active':''}" data-mt="tv">TV Show</button>
+        </div>
+      </div>
+      <div class="field">
         <label>Search title</label>
-        <input type="text" id="search-input" placeholder="Start typing a movie title…" autofocus/>
+        <input type="text" id="search-input" placeholder="${isTv?'Start typing a show title…':'Start typing a movie title…'}" autofocus/>
         <div class="searchresults" id="search-results"></div>
         ${!state.settings.tmdbKey ? `<div class="hint" style="margin-top:8px;">Add a TMDB API key in Settings to enable search &amp; posters.</div>`:''}
       </div>` : `
       <div class="selectedmovie">
         ${m.selected.poster?`<img src="${m.selected.poster}"/>`:''}
-        <div><h3 style="margin:0;font-family:var(--serif);">${escapeHtml(m.selected.title)}</h3><div class="hint">${m.selected.year||''}${m.selected.genres&&m.selected.genres.length?' · '+m.selected.genres.join(', '):''}</div></div>
+        <div><h3 style="margin:0;font-family:var(--display);font-style:italic;">${escapeHtml(m.selected.title)}</h3><div class="hint">${m.selected.mediaType==='tv'?'TV show':'Movie'} · ${m.selected.year||''}${m.selected.genres&&m.selected.genres.length?' · '+m.selected.genres.join(', '):''}</div></div>
       </div>
-      ${!m.editingId && dupe ? `<div class="dupewarn"><b>Already logged.</b> You watched this ${dupe.preLogged?'before you started logging':'on '+(dupe.dateWatched||'')}. Save again below to add it as a rewatch, or close this and edit the original entry instead.</div>`:''}
+      ${!m.editingId && dupe ? `<div class="dupewarn"><b>Already logged.</b> You watched this ${dupe.preLogged?'before you started logging':'starting '+(dupe.startDate||'')}. Save again below to add it as a rewatch, or close this and edit the original entry instead.</div>`:''}
       `}
 
       ${m.selected ? `
@@ -665,11 +763,42 @@ function renderModal(){
         <span>No date available (pre-logged)</span>
         <div class="switch ${f.preLogged?'on':''}" id="tog-prelogged"></div>
       </div>
+
       ${!f.preLogged ? `
+      <div class="toggle-line">
+        <span>Watched across multiple sessions</span>
+        <div class="switch ${f.multiSession?'on':''}" id="tog-multisession"></div>
+      </div>
+
+      ${!f.multiSession ? `
       <div class="row2">
-        <div class="field"><label>Date watched</label><input type="date" id="f-date" value="${f.dateWatched}"/></div>
-        <div class="field"><label>Time</label><input type="time" id="f-time" value="${f.timeWatched}"/></div>
-      </div>`:''}
+        <div class="field"><label>Date watched</label><input type="date" id="f-startdate" value="${f.startDate}"/></div>
+        <div class="field"><label>Time</label><input type="time" id="f-starttime" value="${f.startTime}"/></div>
+      </div>` : `
+      <div class="row2">
+        <div class="field"><label>Started</label><input type="date" id="f-startdate" value="${f.startDate}"/></div>
+        <div class="field"><label>Time</label><input type="time" id="f-starttime" value="${f.startTime}"/></div>
+      </div>
+      <div class="toggle-line">
+        <span>${isTv?"I've finished the show":"I finished it"}</span>
+        <div class="switch ${f.completed?'on':''}" id="tog-completed"></div>
+      </div>
+      ${f.completed ? `
+      <div class="row2">
+        <div class="field"><label>Finished</label><input type="date" id="f-enddate" value="${f.endDate||f.startDate}"/></div>
+        <div class="field"><label>Time</label><input type="time" id="f-endtime" value="${f.endTime}"/></div>
+      </div>` : isTv ? `
+      <div class="row2">
+        <div class="field"><label>Up to season</label><input type="number" id="f-lastseason" min="1" value="${f.lastSeason}"/></div>
+        <div class="field"><label>Episode</label><input type="number" id="f-lastepisode" min="1" value="${f.lastEpisode}"/></div>
+      </div>
+      <div class="field"><label>Note</label><textarea id="f-scenenote" rows="2" placeholder="Anything worth remembering about where you're up to">${escapeHtml(f.sceneNote)}</textarea></div>
+      ` : `
+      <div class="field"><label>Time stopped at</label><input type="text" id="f-timestopped" placeholder="e.g. 1:24:00" value="${escapeHtml(f.timeStopped)}"/></div>
+      <div class="field"><label>Scene last remembered</label><textarea id="f-scenenote" rows="2" placeholder="What was happening when you stopped?">${escapeHtml(f.sceneNote)}</textarea></div>
+      `}
+      `}
+      `:''}
 
       <div class="field">
         <label>Watched with</label>
@@ -695,20 +824,9 @@ function renderModal(){
       </div>
 
       <div class="field">
-        <label>Tags <span style="text-transform:none;color:var(--text-faint);">(who picked it, occasion, etc.)</span></label>
+        <label>Tags <span style="text-transform:none;color:var(--ink-soft);">(who picked it, occasion, etc.)</span></label>
         <input type="text" id="f-tags" placeholder="e.g. Hilda picked, date night" value="${escapeHtml(f.tags)}"/>
       </div>
-
-      <div class="toggle-line">
-        <span>Partially watched</span>
-        <div class="switch ${f.partial?'on':''}" id="tog-partial">
-      </div></div>
-      ${f.partial?`
-      <div class="row2">
-        <div class="field"><label>Time stopped at</label><input type="text" id="f-timestopped" placeholder="e.g. 1:24:00" value="${escapeHtml(f.timeStopped)}"/></div>
-      </div>
-      <div class="field"><label>Scene last remembered</label><textarea id="f-scenenote" rows="2" placeholder="What was happening when you stopped?">${escapeHtml(f.sceneNote)}</textarea></div>
-      `:''}
 
       <div class="row2">
         <div class="field"><label>Your rating (0–10)</label><input type="number" id="f-rating-b" min="0" max="10" step="0.5" value="${f.ratingBailey}"/></div>
@@ -740,6 +858,7 @@ function bindModal(){
   document.getElementById('modal-close').onclick = ()=>{ state.modal=null; render(); };
 
   if(!m.selected){
+    document.querySelectorAll('[data-mt]').forEach(b=>b.onclick=()=>{ addModalType=b.dataset.mt; render(); });
     const input = document.getElementById('search-input');
     let timer;
     input.oninput = ()=>{
@@ -747,19 +866,19 @@ function bindModal(){
       const q = input.value.trim();
       if(q.length<2){ document.getElementById('search-results').innerHTML=''; return; }
       timer = setTimeout(async ()=>{
-        const res = await tmdbSearch(q);
+        const res = await tmdbSearch(q, addModalType);
         const box = document.getElementById('search-results');
         if(res.error==='nokey'){ box.innerHTML = `<div class="hint">Add your TMDB key in Settings first.</div>`; return; }
         if(res.error){ box.innerHTML = `<div class="hint">Search failed — check your API key or connection.</div>`; return; }
         box.innerHTML = res.results.slice(0,8).map(r=>`
           <div class="sr-item" data-pick='${r.id}'>
-            ${r.poster_path?`<img src="${IMG+r.poster_path}"/>`:'<div class="noimg" style="width:40px;height:60px;">🎬</div>'}
-            <div><div class="t">${escapeHtml(r.title)}</div><div class="y">${r.release_date?r.release_date.slice(0,4):'—'}</div></div>
+            ${r.poster?`<img src="${r.poster}"/>`:'<div class="noimg" style="width:38px;height:57px;">🎬</div>'}
+            <div><div class="t">${escapeHtml(r.title)}</div><div class="y">${r.year||'—'}</div></div>
           </div>`).join('');
         box.querySelectorAll('[data-pick]').forEach(el=>{
           el.onclick = ()=>{
             const r = res.results.find(x=>x.id==el.dataset.pick);
-            state.modal.selected = { id:r.id, title:r.title, year: r.release_date?r.release_date.slice(0,4):'', poster: r.poster_path?IMG+r.poster_path:'', genres: genreNames(r.genre_ids) };
+            state.modal.selected = { id:r.id, mediaType:addModalType, title:r.title, year:r.year, poster:r.poster, genres: genreNames(r.genreIds, addModalType) };
             render();
           };
         });
@@ -771,40 +890,53 @@ function bindModal(){
   const f = state.modal.form;
   const q = (id)=>document.getElementById(id);
   if(q('tog-prelogged')) q('tog-prelogged').onclick=()=>{ f.preLogged=!f.preLogged; render(); };
+  if(q('tog-multisession')) q('tog-multisession').onclick=()=>{ f.multiSession=!f.multiSession; render(); };
+  if(q('tog-completed')) q('tog-completed').onclick=()=>{ f.completed=!f.completed; render(); };
   if(q('tog-fav')) q('tog-fav').onclick=()=>{ f.favorite=!f.favorite; render(); };
-  if(q('tog-partial')) q('tog-partial').onclick=()=>{ f.partial=!f.partial; render(); };
   if(q('tog-rewatch')) q('tog-rewatch').onclick=()=>{ f.isRewatch=!f.isRewatch; render(); };
   document.querySelectorAll('[data-ww]').forEach(b=>b.onclick=()=>{ f.watchedWith=b.dataset.ww; render(); });
   document.querySelectorAll('[data-loc]').forEach(b=>b.onclick=()=>{ f.location = f.location===b.dataset.loc? '' : b.dataset.loc; render(); });
 
   if(q('save-entry')) q('save-entry').onclick = async ()=>{
-    if(q('f-date')) f.dateWatched = q('f-date').value;
-    if(q('f-time')) f.timeWatched = q('f-time').value;
+    if(q('f-startdate')) f.startDate = q('f-startdate').value;
+    if(q('f-starttime')) f.startTime = q('f-starttime').value;
+    if(q('f-enddate')) f.endDate = q('f-enddate').value;
+    if(q('f-endtime')) f.endTime = q('f-endtime').value;
     if(q('f-ww-other')) f.watchedWithOther = q('f-ww-other').value;
     if(q('f-loc-other')) f.locationOther = q('f-loc-other').value;
     if(q('f-tags')) f.tags = q('f-tags').value;
     if(q('f-timestopped')) f.timeStopped = q('f-timestopped').value;
     if(q('f-scenenote')) f.sceneNote = q('f-scenenote').value;
+    if(q('f-lastseason')) f.lastSeason = q('f-lastseason').value ? Number(q('f-lastseason').value) : null;
+    if(q('f-lastepisode')) f.lastEpisode = q('f-lastepisode').value ? Number(q('f-lastepisode').value) : null;
     if(q('f-rating-b')) f.ratingBailey = q('f-rating-b').value ? Number(q('f-rating-b').value) : null;
     if(q('f-rating-h')) f.ratingHilda = q('f-rating-h').value ? Number(q('f-rating-h').value) : null;
 
-    const dupe = state.movies.find(mv=>mv.tmdbId===state.modal.selected.id && mv.id!==state.modal.editingId);
+    const dupe = state.movies.find(mv=>mv.tmdbId===state.modal.selected.id && mv.mediaType===state.modal.selected.mediaType && mv.id!==state.modal.editingId);
     const isRewatch = q('tog-rewatch-locked') ? true : f.isRewatch;
+    const completed = f.preLogged ? true : (f.multiSession ? f.completed : true);
 
     const entry = {
       id: state.modal.editingId || uid(),
       tmdbId: state.modal.selected.id,
+      mediaType: state.modal.selected.mediaType,
       title: state.modal.selected.title,
       year: state.modal.selected.year,
       poster: state.modal.selected.poster,
       genres: state.modal.selected.genres,
       preLogged: f.preLogged,
-      dateWatched: f.preLogged ? null : f.dateWatched,
-      timeWatched: f.preLogged ? null : f.timeWatched,
+      startDate: f.preLogged ? null : f.startDate,
+      startTime: f.preLogged ? null : f.startTime,
+      endDate: f.preLogged ? null : (completed ? (f.endDate || f.startDate) : null),
+      endTime: f.preLogged ? null : (completed ? f.endTime : null),
       watchedWith: f.watchedWith, watchedWithOther: f.watchedWithOther,
       location: f.location, locationOther: f.locationOther,
       favorite: f.favorite, tags: f.tags,
-      partial: f.partial, timeStopped: f.timeStopped, sceneNote: f.sceneNote,
+      completed: completed,
+      timeStopped: completed ? '' : f.timeStopped,
+      sceneNote: completed ? '' : f.sceneNote,
+      lastSeason: completed ? null : f.lastSeason,
+      lastEpisode: completed ? null : f.lastEpisode,
       ratingBailey: f.ratingBailey, ratingHilda: f.ratingHilda,
       isRewatch: !!(isRewatch || (dupe && !state.modal.editingId))
     };
