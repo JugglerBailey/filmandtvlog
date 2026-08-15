@@ -60,6 +60,27 @@ select{flex:1;min-width:100px;}
 
 /* Editorial grid card */
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:22px 14px;}
+.grid.cols-3{grid-template-columns:repeat(3,1fr);gap:16px 8px;}
+.grid.cols-4{grid-template-columns:repeat(4,1fr);gap:12px 6px;}
+.grid.cols-3 .gridcard h3{font-size:12px;}
+.grid.cols-4 .gridcard h3{font-size:11px;}
+.grid.cols-3 .gridcard .meta,.grid.cols-4 .gridcard .meta{font-size:9px;}
+.grid.cols-4 .gridcard .ratings{display:none;}
+.grid.cols-3 .gridcard .poster,.grid.cols-4 .gridcard .poster{box-shadow:3px 3px 0 var(--ink);}
+.densitytoggle{display:flex;gap:6px;margin-bottom:12px;justify-content:flex-end;}
+.densitytoggle button{width:32px;height:32px;border:2px solid var(--ink);background:var(--surface);color:var(--ink);cursor:pointer;font-family:var(--mono);font-size:12px;padding:0;}
+.densitytoggle button.active{background:var(--ink);color:var(--accent-ink);}
+
+/* Swipe carousel */
+.swipe-wrap{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:16px;padding:6px 30px 22px;margin:0 -14px;}
+.swipe-wrap::-webkit-scrollbar{display:none;}
+.swipe-card{scroll-snap-align:center;flex:0 0 76%;background:var(--surface);border:2px solid var(--ink);box-shadow:5px 5px 0 var(--ink);}
+.swipe-card .poster{width:100%;aspect-ratio:2/3;background:var(--surface-2);overflow:hidden;border-bottom:2px solid var(--ink);}
+.swipe-card .poster img{width:100%;height:100%;object-fit:cover;display:block;}
+.swipe-card .cap{padding:12px;}
+.swipe-card h3{font-family:var(--display);font-weight:600;font-size:18px;margin:0 0 4px;}
+.swipe-card .meta{font-family:var(--mono);font-size:10px;color:var(--ink-soft);text-transform:uppercase;margin-bottom:10px;}
+.swipe-hint{text-align:center;font-family:var(--mono);font-size:10px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;}
 .gridcard{cursor:pointer;}
 .gridcard .poster{width:100%;aspect-ratio:2/3;background:var(--surface-2);border:2px solid var(--ink);overflow:hidden;position:relative;box-shadow:4px 4px 0 var(--ink);}
 .gridcard .poster img{width:100%;height:100%;object-fit:cover;display:block;}
@@ -183,10 +204,13 @@ let state = {
   tab: 'watched',
   movies: [],           // logged/watched entries
   watchlists: [],        // [{id,name,items:[]}]
-  settings: { tmdbKey:'', genreMapMovie:{}, genreMapTv:{}, partnerLabel:'With Hilda' },
+  settings: { tmdbKey:'', genreMapMovie:{}, genreMapTv:{}, partnerLabel:'Hilda' },
   loaded: false,
-  watchedFilter: null,   // null | 'hilda' | 'alone'
+  watchedFilter: null,   // null | 'together' | 'alone'
   typeFilter: 'all',     // all | movie | tv
+  gridCols: Number(localStorage.getItem('reellog:gridCols')) || 2,
+  wlView: 'grid',        // grid | swipe
+  filterPopupOpen: false,
   wf: { genre:'', status:'', fav:false, minRating:'', location:'' },
   wlActive: null,
   modal: null,            // {type:'add', prefill, editingId, fromWatchlist}
@@ -197,8 +221,8 @@ function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(
 async function loadAll(){
   state.movies = await sGet('movies', []);
   state.watchlists = await sGet('watchlists', []);
-  state.settings = await sGet('settings', { tmdbKey:'', genreMapMovie:{}, genreMapTv:{}, partnerLabel:'With Hilda' });
-  if(!state.settings.partnerLabel) state.settings.partnerLabel = 'With Hilda';
+  state.settings = await sGet('settings', { tmdbKey:'', genreMapMovie:{}, genreMapTv:{}, partnerLabel:'Hilda' });
+  if(!state.settings.partnerLabel || state.settings.partnerLabel==='With Hilda') state.settings.partnerLabel = 'Hilda';
   if(!state.settings.genreMapMovie) state.settings.genreMapMovie = state.settings.genreMap || {};
   if(!state.settings.genreMapTv) state.settings.genreMapTv = {};
   if(state.watchlists.length===0){
@@ -285,16 +309,18 @@ function render(){
       <button class="navbtn ${state.tab==='settings'?'active':''}" data-tab="settings">${ICON.settings}<span>Settings</span></button>
     </div></div>
     ${state.modal ? renderModal() : ''}
+    ${state.filterPopupOpen ? renderFilterPopup() : ''}
   `;
   renderContent();
   bindNav();
   if(state.tab==='watched'){ document.getElementById('fab-add').onclick = ()=>openAddModal(); }
   if(state.modal) bindModal();
+  if(state.filterPopupOpen) bindFilterPopup();
 }
 
 function bindNav(){
   document.querySelectorAll('.navbtn').forEach(b=>{
-    b.onclick = ()=>{ state.tab = b.dataset.tab; state.modal=null; render(); };
+    b.onclick = ()=>{ state.tab = b.dataset.tab; state.modal=null; state.filterPopupOpen=false; render(); };
   });
 }
 
@@ -307,10 +333,13 @@ function renderContent(){
   if(state.tab==='prelogged') return renderPrelogged(c);
 }
 
+function isTogether(m){ return m.watchedWith==='together' || m.watchedWith==='hilda' || m.watchedWith==='other'; }
+function togetherName(m){ return m.watchedWithOther || (m.watchedWith==='hilda' ? (state.settings.partnerLabel||'Hilda') : 'Together'); }
+
 function filteredMovies(){
   let list = [...state.movies];
   if(state.typeFilter!=='all') list = list.filter(m=>(m.mediaType||'movie')===state.typeFilter);
-  if(state.watchedFilter==='hilda') list = list.filter(m=>m.watchedWith==='hilda');
+  if(state.watchedFilter==='together') list = list.filter(m=>isTogether(m));
   if(state.watchedFilter==='alone') list = list.filter(m=>m.watchedWith==='alone');
   if(state.wf.genre) list = list.filter(m=>(m.genres||[]).includes(state.wf.genre));
   if(state.wf.status==='partial') list = list.filter(m=>!m.completed);
@@ -325,28 +354,18 @@ function filteredMovies(){
   return list;
 }
 
-function renderWatched(c){
+function renderFilterPopup(){
   const allGenres = [...new Set(state.movies.flatMap(m=>m.genres||[]))].sort();
-  const list = filteredMovies();
-  const showPanel = state.watchedFilter!==null;
-  c.innerHTML = `
-    <div class="pillrow">
-      <button class="pill ${state.typeFilter==='all'?'active':''}" data-t="all">All Types</button>
-      <button class="pill ${state.typeFilter==='movie'?'active':''}" data-t="movie">Movies</button>
-      <button class="pill ${state.typeFilter==='tv'?'active':''}" data-t="tv">TV Shows</button>
-    </div>
-    <div class="pillrow">
-      <button class="pill ${state.watchedFilter===null?'active':''}" data-f="all">All</button>
-      <button class="pill ${state.watchedFilter==='hilda'?'active':''}" data-f="hilda">${escapeHtml(state.settings.partnerLabel)}</button>
-      <button class="pill ${state.watchedFilter==='alone'?'active':''}" data-f="alone">Watched Alone</button>
-    </div>
-    ${showPanel ? `
-    <div class="filterpanel">
-      <div class="filterrow">
+  return `
+  <div class="modal-backdrop" id="filter-backdrop">
+    <div class="modal" style="position:relative;">
+      <button class="modal-close" id="filter-close">✕</button>
+      <h2>Filters</h2>
+      <div class="field">
         <label>Genre</label>
         <select id="f-genre"><option value="">Any genre</option>${allGenres.map(g=>`<option value="${g}" ${state.wf.genre===g?'selected':''}>${g}</option>`).join('')}</select>
       </div>
-      <div class="filterrow">
+      <div class="field">
         <label>Status</label>
         <select id="f-status">
           <option value="" ${!state.wf.status?'selected':''}>Any status</option>
@@ -354,46 +373,81 @@ function renderWatched(c){
           <option value="partial" ${state.wf.status==='partial'?'selected':''}>Still in progress</option>
         </select>
       </div>
-      <div class="filterrow">
+      <div class="field">
         <label>Min rating</label>
         <select id="f-rating">
           <option value="">Any rating</option>
           ${[9,8,7,6,5,4,3].map(n=>`<option value="${n}" ${state.wf.minRating==n?'selected':''}>${n}+</option>`).join('')}
         </select>
-        <label style="width:auto;margin:0;display:flex;align-items:center;gap:6px;"><input type="checkbox" id="f-fav" ${state.wf.fav?'checked':''}/> Favorites only</label>
       </div>
-      <div class="filterrow">
+      <div class="toggle-line">
+        <span>Favorites only</span>
+        <div class="switch ${state.wf.fav?'on':''}" id="f-fav-tog"></div>
+      </div>
+      <div class="field">
         <label>Location</label>
         <select id="f-loc">
           <option value="">Any location</option>
           ${['Cinema','Home','iPad','Phone','Other'].map(l=>`<option value="${l}" ${state.wf.location===l?'selected':''}>${l}</option>`).join('')}
         </select>
       </div>
-    </div>` : ''}
+      <div style="display:flex;gap:10px;margin-top:6px;">
+        <button class="btn secondary block" id="f-reset">Reset</button>
+        <button class="btn block" id="f-done">Done</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function bindFilterPopup(){
+  const close = ()=>{ state.filterPopupOpen=false; render(); };
+  document.getElementById('filter-backdrop').onclick = (e)=>{ if(e.target.id==='filter-backdrop') close(); };
+  document.getElementById('filter-close').onclick = close;
+  document.getElementById('f-done').onclick = close;
+  document.getElementById('f-reset').onclick = ()=>{ state.wf = { genre:'', status:'', fav:false, minRating:'', location:'' }; render(); };
+  document.getElementById('f-fav-tog').onclick = ()=>{ state.wf.fav = !state.wf.fav; render(); };
+  const bind = (id,key)=>{
+    const el = document.getElementById(id);
+    el.onchange = ()=>{ state.wf[key] = el.value; render(); };
+  };
+  bind('f-genre','genre'); bind('f-status','status'); bind('f-rating','minRating'); bind('f-loc','location');
+}
+
+function renderWatched(c){
+  const list = filteredMovies();
+  const hasExtra = !!(state.wf.genre || state.wf.status || state.wf.fav || state.wf.minRating || state.wf.location);
+  c.innerHTML = `
+    <div class="pillrow">
+      <button class="pill ${state.typeFilter==='all'?'active':''}" data-t="all">All Types</button>
+      <button class="pill ${state.typeFilter==='movie'?'active':''}" data-t="movie">Movies</button>
+      <button class="pill ${state.typeFilter==='tv'?'active':''}" data-t="tv">TV Shows</button>
+    </div>
+    <div class="pillrow">
+      <button class="pill ${state.watchedFilter===null && !hasExtra?'active':''}" data-f="all">All</button>
+      <button class="pill ${state.watchedFilter==='together'?'active':''}" data-f="together">Together</button>
+      <button class="pill ${state.watchedFilter==='alone'?'active':''}" data-f="alone">Watched Alone</button>
+      <button class="pill ${hasExtra?'active':''}" id="open-filters">Filter${hasExtra?' •':''}</button>
+    </div>
+    ${densityToggleHtml()}
     ${list.length===0 ? `<div class="empty"><b>Nothing here yet</b>Tap + Log to add the first title.</div>` :
-      `<div class="grid">${list.map(m=>movieCard(m)).join('')}</div>`}
+      `<div class="grid cols-${state.gridCols}">${list.map(m=>movieCard(m)).join('')}</div>`}
   `;
+  bindDensityToggle(c);
   c.querySelectorAll('[data-t]').forEach(p=>p.onclick=()=>{ state.typeFilter = p.dataset.t; render(); });
   c.querySelectorAll('[data-f]').forEach(p=>p.onclick=()=>{
     const f = p.dataset.f;
-    state.watchedFilter = f==='all' ? null : (state.watchedFilter===f ? null : f);
+    if(f==='all'){ state.watchedFilter = null; state.wf = { genre:'', status:'', fav:false, minRating:'', location:'' }; }
+    else { state.watchedFilter = (state.watchedFilter===f ? null : f); }
     render();
   });
-  if(showPanel){
-    const bind = (id,key,checkbox)=>{
-      const el = document.getElementById(id);
-      if(!el) return;
-      el.onchange = ()=>{ state.wf[key] = checkbox ? el.checked : el.value; render(); };
-    };
-    bind('f-genre','genre'); bind('f-status','status'); bind('f-rating','minRating'); bind('f-fav','fav',true); bind('f-loc','location');
-  }
+  document.getElementById('open-filters').onclick = ()=>{ state.filterPopupOpen = true; render(); };
   c.querySelectorAll('[data-open]').forEach(card=>card.onclick=()=>openAddModal(state.movies.find(m=>m.id===card.dataset.open)));
 }
 
 function fmtDate(d){ return d ? new Date(d+'T00:00').toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'}) : ''; }
 
 function movieCard(m){
-  const withTag = m.watchedWith==='hilda' ? `<span class="tag hilda">${escapeHtml(state.settings.partnerLabel)}</span>` : m.watchedWith==='alone' ? `<span class="tag">Watched alone</span>` : m.watchedWith==='other' ? `<span class="tag">${escapeHtml(m.watchedWithOther||'Other')}</span>` : '';
+  const withTag = isTogether(m) ? `<span class="tag hilda">${escapeHtml(togetherName(m))}</span>` : m.watchedWith==='alone' ? `<span class="tag">Watched alone</span>` : '';
   let dateStr = m.preLogged ? 'Pre-logged' : '';
   if(!m.preLogged){
     if(m.startDate && m.endDate && m.startDate!==m.endDate) dateStr = `${fmtDate(m.startDate)} → ${fmtDate(m.endDate)}`;
@@ -420,6 +474,19 @@ function movieCard(m){
 
 function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+function densityToggleHtml(){
+  return `<div class="densitytoggle">
+    ${[2,3,4].map(n=>`<button data-cols="${n}" class="${state.gridCols===n?'active':''}" title="${n} per row">${n}</button>`).join('')}
+  </div>`;
+}
+function bindDensityToggle(c){
+  c.querySelectorAll('[data-cols]').forEach(b=>b.onclick=()=>{
+    state.gridCols = Number(b.dataset.cols);
+    localStorage.setItem('reellog:gridCols', state.gridCols);
+    render();
+  });
+}
+
 /* ---------------- WATCHLIST TAB ---------------- */
 let wlQuickType = 'movie';
 function renderWatchlist(c){
@@ -437,8 +504,29 @@ function renderWatchlist(c){
       ${state.watchlists.map(l=>`<button class="pill ${l.id===active.id?'active':''}" data-l="${l.id}">${escapeHtml(l.name)} (${l.items.length})</button>`).join('')}
       <button class="pill" id="wl-new">+ New list</button>
     </div>
+    <div class="pillrow" style="justify-content:space-between;">
+      <div style="display:flex;gap:8px;">
+        <button class="pill ${state.wlView==='grid'?'active':''}" data-view="grid">Grid</button>
+        <button class="pill ${state.wlView==='swipe'?'active':''}" data-view="swipe">Swipe</button>
+      </div>
+      ${state.wlView==='grid' ? densityToggleHtml() : ''}
+    </div>
     ${active.items.length===0 ? `<div class="empty"><b>List is empty</b>Search a title above to add it.</div>` :
-      `<div class="grid">${active.items.map(it=>`
+      state.wlView==='swipe' ? `
+      <div class="swipe-hint">← Swipe through ${active.items.length} title${active.items.length===1?'':'s'} →</div>
+      <div class="swipe-wrap">${active.items.map(it=>`
+      <div class="swipe-card">
+        <div class="poster">${it.poster?`<img src="${it.poster}"/>`:`<div class="noimg">🎬</div>`}</div>
+        <div class="cap">
+          <h3>${escapeHtml(it.title)} ${it.year?`<em style="color:var(--ink-soft);font-weight:400;">'${String(it.year).slice(2)}</em>`:''}</h3>
+          <div class="meta">${[it.mediaType==='tv'?'TV':'Movie', (it.genres||[]).slice(0,2).join(' · ')].filter(Boolean).join(' · ')}</div>
+          <div class="actions">
+            <button class="btn block" data-watch="${it.id}" style="padding:10px;">Mark watched</button>
+            <button class="btn secondary block" data-remove="${it.id}" style="padding:10px;">Remove</button>
+          </div>
+        </div>
+      </div>`).join('')}</div>` :
+      `<div class="grid cols-${state.gridCols}">${active.items.map(it=>`
       <div class="gridcard">
         <div class="poster">${it.poster?`<img src="${it.poster}"/>`:`<div class="noimg">🎬</div>`}</div>
         <div class="cap">
@@ -451,6 +539,8 @@ function renderWatchlist(c){
         </div>
       </div>`).join('')}</div>`}
   `;
+  bindDensityToggle(c);
+  c.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{ state.wlView = b.dataset.view; render(); });
   document.getElementById('wl-quick-btn').onclick = ()=>quickAddToWatchlist(active.id);
   document.getElementById('wl-quick').onkeydown = (e)=>{ if(e.key==='Enter') quickAddToWatchlist(active.id); };
   c.querySelectorAll('[data-qt]').forEach(b=>b.onclick=()=>{ wlQuickType=b.dataset.qt; render(); });
@@ -489,7 +579,7 @@ function renderSettings(c){
   c.innerHTML = `
     <div class="stat-row">
       <div class="stat"><b>${state.movies.length}</b><span>Total logged</span></div>
-      <div class="stat"><b>${state.movies.filter(m=>m.watchedWith==='hilda').length}</b><span>${escapeHtml(state.settings.partnerLabel)}</span></div>
+      <div class="stat"><b>${state.movies.filter(m=>isTogether(m)).length}</b><span>Together</span></div>
       <div class="stat"><b>${state.movies.filter(m=>m.favorite).length}</b><span>Favorites</span></div>
     </div>
     <div class="settings-section">
@@ -504,9 +594,9 @@ function renderSettings(c){
       `}
     </div>
     <div class="settings-section">
-      <h3>Watched-together label</h3>
-      <div class="field"><input type="text" id="partner-label" placeholder="e.g. With Hilda, Together, Date night" value="${escapeHtml(state.settings.partnerLabel)}"/></div>
-      <div class="hint">This is the text used for the filter, tag, and toggle wherever a film is marked as watched together.</div>
+      <h3>Default companion name</h3>
+      <div class="field"><input type="text" id="partner-label" placeholder="e.g. Hilda" value="${escapeHtml(state.settings.partnerLabel)}"/></div>
+      <div class="hint">The "Together" option now works with anyone — it pre-fills this name each time, but you can overwrite it per entry for a one-off watch with a friend or family member.</div>
       <button class="btn" id="save-partner-label" style="margin-top:10px;">Save</button>
     </div>
     <div class="settings-section">
@@ -549,7 +639,7 @@ function renderSettings(c){
   };
   document.getElementById('save-partner-label').onclick = async ()=>{
     const val = document.getElementById('partner-label').value.trim();
-    state.settings.partnerLabel = val || 'With Hilda';
+    state.settings.partnerLabel = val || 'Hilda';
     await sSet('settings', state.settings);
     render();
   };
@@ -621,7 +711,7 @@ function renderSettings(c){
 }
 
 /* ---------------- BATCH IMPORT TAB ---------------- */
-let batchState = { withHilda:false, dest:'watched', listId:null, running:false, log:[] };
+let batchState = { withHilda:false, togetherName:'', dest:'watched', listId:null, running:false, log:[] };
 function renderPrelogged(c){
   if(!batchState.listId && state.watchlists.length) batchState.listId = state.watchlists[0].id;
   c.innerHTML = `
@@ -641,15 +731,17 @@ function renderPrelogged(c){
       <select id="batch-listid">${state.watchlists.map(l=>`<option value="${l.id}" ${l.id===batchState.listId?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}</select>
     </div>` : `
     <div class="toggle-line">
-      <span>${escapeHtml(state.settings.partnerLabel)}</span>
+      <span>Together</span>
       <div class="switch ${batchState.withHilda?'on':''}" id="batch-switch"></div>
-    </div>`}
+    </div>
+    ${batchState.withHilda ? `<div class="field"><label>Who with</label><input type="text" id="batch-name" placeholder="${escapeHtml(state.settings.partnerLabel)}" value="${escapeHtml(batchState.togetherName)}"/></div>` : ''}`}
     <button class="btn block" id="batch-run" ${batchState.running?'disabled':''}>${batchState.running?'Importing…':'Import list'}</button>
     ${batchState.log.length ? `<div class="settings-section" style="margin-top:16px;"><h3>Import results</h3>${batchState.log.map(l=>`<div class="listrow"><span>${l.ok?'✓':'✕'} ${escapeHtml(l.line)}${l.ok?` — ${escapeHtml(l.title)} (${l.mediaType==='tv'?'TV':'Movie'})`:' — no match found'}</span></div>`).join('')}</div>` : ''}
   `;
   document.getElementById('back-settings').onclick = ()=>{ state.tab='settings'; render(); };
   c.querySelectorAll('[data-dest]').forEach(b=>b.onclick=()=>{ batchState.dest=b.dataset.dest; render(); });
   if(document.getElementById('batch-switch')) document.getElementById('batch-switch').onclick = ()=>{ batchState.withHilda=!batchState.withHilda; render(); };
+  if(document.getElementById('batch-name')) document.getElementById('batch-name').oninput = (e)=>{ batchState.togetherName = e.target.value; };
   if(document.getElementById('batch-listid')) document.getElementById('batch-listid').onchange = (e)=>{ batchState.listId = e.target.value; };
   document.getElementById('batch-run').onclick = runBatchImport;
 }
@@ -676,7 +768,7 @@ async function runBatchImport(){
         state.movies.push({
           id:uid(), tmdbId:pick.id, mediaType:pick.mediaType, title:pick.title, year:pick.year, poster:pick.poster, genres:genreNames(pick.genreIds,pick.mediaType),
           preLogged:true, startDate:null, startTime:null, endDate:null, endTime:null,
-          watchedWith: batchState.withHilda?'hilda':'alone', watchedWithOther:'',
+          watchedWith: batchState.withHilda?'together':'alone', watchedWithOther: batchState.withHilda?(batchState.togetherName||state.settings.partnerLabel):'',
           isRewatch: !!dupe, favorite:false, completed:true, timeStopped:'', sceneNote:'', lastSeason:null, lastEpisode:null,
           tags:'', ratingBailey:null, ratingHilda:null, location:'', locationOther:''
         });
@@ -707,7 +799,8 @@ function openAddModal(existing, fromWatchlistItem, fromWatchlistId){
       preLogged: existing.preLogged, multiSession: !!(existing.startDate && existing.endDate && existing.startDate!==existing.endDate) || (!existing.completed && !existing.preLogged),
       startDate: existing.startDate||new Date().toISOString().slice(0,10), startTime: existing.startTime||'',
       endDate: existing.endDate||'', endTime: existing.endTime||'',
-      watchedWith: existing.watchedWith||'alone', watchedWithOther: existing.watchedWithOther||'',
+      watchedWith: existing.watchedWith==='hilda'||existing.watchedWith==='other' ? 'together' : (existing.watchedWith||'alone'),
+      watchedWithOther: existing.watchedWithOther || (existing.watchedWith==='hilda' ? state.settings.partnerLabel : ''),
       location: existing.location||'', locationOther: existing.locationOther||'',
       favorite: existing.favorite||false, tags: existing.tags||'',
       completed: existing.completed!==false, timeStopped: existing.timeStopped||'', sceneNote: existing.sceneNote||'',
@@ -753,8 +846,10 @@ function renderModal(){
       </div>` : `
       <div class="selectedmovie">
         ${m.selected.poster?`<img src="${m.selected.poster}"/>`:''}
-        <div><h3 style="margin:0;font-family:var(--display);font-style:italic;">${escapeHtml(m.selected.title)}</h3><div class="hint">${m.selected.mediaType==='tv'?'TV show':'Movie'} · ${m.selected.year||''}${m.selected.genres&&m.selected.genres.length?' · '+m.selected.genres.join(', '):''}</div></div>
+        <div style="flex:1;"><h3 style="margin:0;font-family:var(--display);font-style:italic;">${escapeHtml(m.selected.title)}</h3><div class="hint">${m.selected.mediaType==='tv'?'TV show':'Movie'} · ${m.selected.year||''}${m.selected.genres&&m.selected.genres.length?' · '+m.selected.genres.join(', '):''}</div></div>
+        <button class="iconbtn" id="change-title" style="border:2px solid var(--ink);flex:none;">Change</button>
       </div>
+      <div class="hint" style="margin-top:6px;">Wrong match — found a TV version of a movie, or vice versa? Tap Change to switch type and search a different title.</div>
       ${!m.editingId && dupe ? `<div class="dupewarn"><b>Already logged.</b> You watched this ${dupe.preLogged?'before you started logging':'starting '+(dupe.startDate||'')}. Save again below to add it as a rewatch, or close this and edit the original entry instead.</div>`:''}
       `}
 
@@ -804,10 +899,9 @@ function renderModal(){
         <label>Watched with</label>
         <div class="seg">
           <button class="seg-btn ${f.watchedWith==='alone'?'active':''}" data-ww="alone">Just me</button>
-          <button class="seg-btn ${f.watchedWith==='hilda'?'active':''}" data-ww="hilda">${escapeHtml(state.settings.partnerLabel)}</button>
-          <button class="seg-btn ${f.watchedWith==='other'?'active':''}" data-ww="other">Other</button>
+          <button class="seg-btn ${(f.watchedWith==='together'||f.watchedWith==='hilda'||f.watchedWith==='other')?'active':''}" data-ww="together">Together</button>
         </div>
-        ${f.watchedWith==='other'?`<input type="text" id="f-ww-other" placeholder="Who?" value="${escapeHtml(f.watchedWithOther)}" style="margin-top:8px;"/>`:''}
+        ${(f.watchedWith==='together'||f.watchedWith==='hilda'||f.watchedWith==='other')?`<input type="text" id="f-ww-other" placeholder="Who with? e.g. Hilda, a friend's name…" value="${escapeHtml(f.watchedWithOther)}" style="margin-top:8px;"/>`:''}
       </div>
 
       <div class="field">
@@ -856,6 +950,7 @@ function bindModal(){
   const m = state.modal;
   document.getElementById('modal-backdrop').onclick = (e)=>{ if(e.target.id==='modal-backdrop'){ state.modal=null; render(); } };
   document.getElementById('modal-close').onclick = ()=>{ state.modal=null; render(); };
+  if(document.getElementById('change-title')) document.getElementById('change-title').onclick = ()=>{ state.modal.selected = null; render(); };
 
   if(!m.selected){
     document.querySelectorAll('[data-mt]').forEach(b=>b.onclick=()=>{ addModalType=b.dataset.mt; render(); });
@@ -894,7 +989,11 @@ function bindModal(){
   if(q('tog-completed')) q('tog-completed').onclick=()=>{ f.completed=!f.completed; render(); };
   if(q('tog-fav')) q('tog-fav').onclick=()=>{ f.favorite=!f.favorite; render(); };
   if(q('tog-rewatch')) q('tog-rewatch').onclick=()=>{ f.isRewatch=!f.isRewatch; render(); };
-  document.querySelectorAll('[data-ww]').forEach(b=>b.onclick=()=>{ f.watchedWith=b.dataset.ww; render(); });
+  document.querySelectorAll('[data-ww]').forEach(b=>b.onclick=()=>{
+    f.watchedWith=b.dataset.ww;
+    if(b.dataset.ww==='together' && !f.watchedWithOther) f.watchedWithOther = state.settings.partnerLabel;
+    render();
+  });
   document.querySelectorAll('[data-loc]').forEach(b=>b.onclick=()=>{ f.location = f.location===b.dataset.loc? '' : b.dataset.loc; render(); });
 
   if(q('save-entry')) q('save-entry').onclick = async ()=>{
