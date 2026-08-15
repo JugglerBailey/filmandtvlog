@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Reel Log">
+<meta name="apple-mobile-web-app-title" content="Our Watch History">
 <meta name="theme-color" content="#f3efe6">
-<title>Reel Log</title>
+<title>Our Watch History</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,600;0,700;1,600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -29,6 +29,42 @@
   --display:'Fraunces',Georgia,'Iowan Old Style',serif;
   --sans:'Space Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
   --mono:ui-monospace,'JetBrains Mono',Menlo,monospace;
+}
+[data-theme="midnight"]{
+  --bg:#14161f;
+  --surface:#1c1f2b;
+  --surface-2:#232636;
+  --ink:#f2efe9;
+  --ink-soft:#9a9bb0;
+  --line:#3a3f56;
+  --line-soft:#2c3143;
+  --accent:#e3583f;
+  --accent-ink:#14161f;
+  --navy:#7c9fd4;
+}
+[data-theme="noir"]{
+  --bg:#0b0b0c;
+  --surface:#161616;
+  --surface-2:#1e1e1e;
+  --ink:#f1ede2;
+  --ink-soft:#8c887c;
+  --line:#3a3730;
+  --line-soft:#2a2823;
+  --accent:#d4af37;
+  --accent-ink:#0b0b0c;
+  --navy:#9aa7c2;
+}
+[data-theme="sepia"]{
+  --bg:#efe3ce;
+  --surface:#faf3e6;
+  --surface-2:#f3e9d6;
+  --ink:#3c2e20;
+  --ink-soft:#8a715a;
+  --line:#3c2e20;
+  --line-soft:#d9c6a5;
+  --accent:#a8461f;
+  --accent-ink:#faf3e6;
+  --navy:#4f5a3a;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:var(--sans);height:100%;}
@@ -160,6 +196,20 @@ select{flex:1;min-width:100px;}
 .stat{flex:1;background:var(--surface);border:2px solid var(--ink);padding:14px 8px;text-align:center;}
 .stat b{display:block;font-family:var(--display);font-size:24px;color:var(--accent);}
 .stat span{font-family:var(--mono);font-size:9px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.8px;}
+
+/* Theme picker */
+.theme-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.theme-swatch{display:flex;flex-direction:column;align-items:center;gap:8px;background:var(--surface);border:2px solid var(--ink);padding:10px;cursor:pointer;font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink);}
+.theme-swatch.active{box-shadow:3px 3px 0 var(--accent);}
+.swatch-preview{width:100%;height:36px;display:flex;align-items:flex-end;justify-content:flex-end;gap:4px;padding:6px;border:1px solid var(--line-soft);}
+.swatch-preview span{width:12px;height:12px;border-radius:50%;display:block;}
+
+/* Lock screen */
+.lockscreen{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;}
+.lockscreen h1{font-family:var(--display);font-style:italic;font-size:34px;margin:0 0 6px;}
+.lockscreen .sub{font-family:var(--mono);font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:2px;margin-bottom:32px;}
+.lockscreen input{width:220px;text-align:center;font-size:20px;letter-spacing:6px;padding:14px;margin-bottom:14px;}
+.lockscreen .err{color:var(--accent);font-family:var(--mono);font-size:12px;margin-bottom:10px;min-height:16px;}
 </style>
 
 </head>
@@ -167,16 +217,35 @@ select{flex:1;min-width:100px;}
 <div id="app"></div>
 
 <script>
-/* ---------------- storage helpers ----------------
-   Uses Firebase Firestore for cross-device sync when a Firebase config has
-   been connected in Settings. Falls back to this device's local storage
-   until that's set up, so the app works immediately either way. */
-let fbDb = null, fbReady = false;
+/* ---------------- baked-in config ----------------
+   Set once so a fresh install/reinstall never needs re-entering. */
+const DEFAULT_FIREBASE_CONFIG = {
+  "apiKey": "AIzaSyCtIlJhmh5lWRGPkv_Cmw1siE2DOHpqHgI",
+  "authDomain": "wewatchedfilmlogger.firebaseapp.com",
+  "projectId": "wewatchedfilmlogger",
+  "storageBucket": "wewatchedfilmlogger.firebasestorage.app",
+  "messagingSenderId": "944650179275",
+  "appId": "1:944650179275:web:404c3f4ab5cffb0f23014e"
+};
+const DEFAULT_TMDB_KEY = '59773d6aa6572f1890714192c9bf85c8';
+const APP_PASSCODE_HASHES = [
+  'd4458781cf4f969f67ac4a4f2b90c03eb6de87538664d15f7a6e15f3b34e3e24', // 3624
+  'bf0a60ee19adc7954e2248d0c4fd7fed44671ea2cff24a6c75127f9ce0183608'  // 1603
+];
+(function quickTheme(){ try{ const t = localStorage.getItem('reellog:themeCache'); if(t) document.documentElement.setAttribute('data-theme', t); }catch(e){} })();
 
-function loadFirebaseConfig(){
-  try{ const raw = localStorage.getItem('reellog:firebaseConfig'); return raw ? JSON.parse(raw) : null; }
-  catch(e){ return null; }
-}
+/* ---------------- storage helpers ----------------
+   Data efficiency: instead of one big shared document (which would resend the
+   ENTIRE log on every single save), settings/watchlists live in small
+   individual docs, and every movie is its own document in a subcollection —
+   adding, editing, or deleting one title only ever transfers that one title,
+   not the whole library. Bulk actions (batch import, multi-select delete)
+   use a single Firestore batch write instead of one round trip per item. */
+let fbDb = null, fbReady = false;
+const MOVIES_COLLECTION = 'reellog_movies';
+const META_COLLECTION = 'reellog_meta';
+const LEGACY_DOC = 'reellog/shared'; // old single-document layout, read once for migration only
+
 function initFirebase(config){
   try{
     if(!firebase.apps.length) firebase.initializeApp(config);
@@ -184,14 +253,30 @@ function initFirebase(config){
     fbReady = true;
   }catch(e){ console.error('firebase init failed', e); fbReady = false; }
 }
-(function bootFirebase(){ const cfg = loadFirebaseConfig(); if(cfg) initFirebase(cfg); })();
+(function bootFirebase(){
+  let cfg = null;
+  try{ const raw = localStorage.getItem('reellog:firebaseConfig'); if(raw) cfg = JSON.parse(raw); }catch(e){}
+  initFirebase(cfg || DEFAULT_FIREBASE_CONFIG);
+})();
 
+let legacyDocCache; // fetched at most once per session, only if a new-style doc is missing
+async function getLegacyField(field){
+  if(legacyDocCache===undefined){
+    try{ const snap = await fbDb.collection('reellog').doc('shared').get(); legacyDocCache = snap.exists ? snap.data() : null; }
+    catch(e){ legacyDocCache = null; }
+  }
+  return legacyDocCache ? legacyDocCache[field] : undefined;
+}
+
+// small settings/watchlists docs
 async function sGet(key, fallback){
   if(fbReady){
     try{
-      const snap = await fbDb.collection('reellog').doc('shared').get();
-      const data = snap.exists ? snap.data() : {};
-      return data[key]!==undefined ? data[key] : fallback;
+      const doc = await fbDb.collection(META_COLLECTION).doc(key).get();
+      if(doc.exists) return doc.data().value;
+      const legacy = await getLegacyField(key);
+      if(legacy!==undefined){ fbDb.collection(META_COLLECTION).doc(key).set({value:legacy}); return legacy; }
+      return fallback;
     }catch(e){ console.error('firestore get failed', e); return fallback; }
   }
   try{ const raw = localStorage.getItem('reellog:'+key); return raw ? JSON.parse(raw) : fallback; }
@@ -199,10 +284,82 @@ async function sGet(key, fallback){
 }
 async function sSet(key, value){
   if(fbReady){
-    try{ await fbDb.collection('reellog').doc('shared').set({[key]:value}, {merge:true}); return; }
+    try{ await fbDb.collection(META_COLLECTION).doc(key).set({value}); return; }
     catch(e){ console.error('firestore set failed', e); }
   }
   try{ localStorage.setItem('reellog:'+key, JSON.stringify(value)); }catch(e){}
+}
+
+// movies: one document per title
+async function loadMovies(){
+  if(fbReady){
+    try{
+      const snap = await fbDb.collection(MOVIES_COLLECTION).get();
+      if(!snap.empty) return snap.docs.map(d=>d.data());
+      const legacy = await getLegacyField('movies');
+      if(legacy && legacy.length){
+        const batch = fbDb.batch();
+        legacy.forEach(m=>batch.set(fbDb.collection(MOVIES_COLLECTION).doc(m.id), m));
+        await batch.commit();
+        return legacy;
+      }
+      return [];
+    }catch(e){ console.error('firestore movies load failed', e); return []; }
+  }
+  try{ const raw = localStorage.getItem('reellog:movies'); return raw ? JSON.parse(raw) : []; }catch(e){ return []; }
+}
+function persistLocalMovies(){
+  try{ localStorage.setItem('reellog:movies', JSON.stringify(state.movies)); }catch(e){}
+}
+async function saveMovie(movie){
+  if(fbReady){
+    try{ await fbDb.collection(MOVIES_COLLECTION).doc(movie.id).set(movie); return; }
+    catch(e){ console.error('firestore movie save failed', e); }
+  }
+  persistLocalMovies();
+}
+async function deleteMovieRemote(id){
+  if(fbReady){
+    try{ await fbDb.collection(MOVIES_COLLECTION).doc(id).delete(); return; }
+    catch(e){ console.error('firestore movie delete failed', e); }
+  }
+  persistLocalMovies();
+}
+async function batchSaveMovies(movies){
+  if(!movies.length) return;
+  if(fbReady){
+    try{
+      const batch = fbDb.batch();
+      movies.forEach(m=>batch.set(fbDb.collection(MOVIES_COLLECTION).doc(m.id), m));
+      await batch.commit();
+      return;
+    }catch(e){ console.error('firestore batch save failed', e); }
+  }
+  persistLocalMovies();
+}
+async function batchDeleteMovies(ids){
+  if(!ids.length) return;
+  if(fbReady){
+    try{
+      const batch = fbDb.batch();
+      ids.forEach(id=>batch.delete(fbDb.collection(MOVIES_COLLECTION).doc(id)));
+      await batch.commit();
+      return;
+    }catch(e){ console.error('firestore batch delete failed', e); }
+  }
+  persistLocalMovies();
+}
+async function batchPatchMovies(ids, patch){
+  if(!ids.length) return;
+  if(fbReady){
+    try{
+      const batch = fbDb.batch();
+      ids.forEach(id=>batch.update(fbDb.collection(MOVIES_COLLECTION).doc(id), patch));
+      await batch.commit();
+      return;
+    }catch(e){ console.error('firestore batch update failed', e); }
+  }
+  persistLocalMovies();
 }
 
 /* ---------------- state ---------------- */
@@ -210,8 +367,9 @@ let state = {
   tab: 'watched',
   movies: [],           // logged/watched entries
   watchlists: [],        // [{id,name,items:[]}]
-  settings: { tmdbKey:'', genreMapMovie:{}, genreMapTv:{}, partnerLabel:'Hilda' },
+  settings: { tmdbKey:'', genreMapMovie:{}, genreMapTv:{}, partnerLabel:'Hilda', theme:'paper', lowDataMode:false },
   loaded: false,
+  locked: false,
   watchedFilter: null,   // null | 'together' | 'alone'
   typeFilter: 'all',     // all | movie | tv
   gridCols: Number(localStorage.getItem('reellog:gridCols')) || 2,
@@ -219,6 +377,7 @@ let state = {
   filterPopupOpen: false,
   selectMode: false,
   selectedIds: new Set(),
+  fixModal: null,
   wf: { genre:'', status:'', fav:false, minRating:'', location:'' },
   wlActive: null,
   modal: null,            // {type:'add', prefill, editingId, fromWatchlist}
@@ -227,18 +386,34 @@ let state = {
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
 async function loadAll(){
-  state.movies = await sGet('movies', []);
+  state.movies = await loadMovies();
   state.watchlists = await sGet('watchlists', []);
-  state.settings = await sGet('settings', { tmdbKey:'', genreMapMovie:{}, genreMapTv:{}, partnerLabel:'Hilda' });
+  state.settings = await sGet('settings', { tmdbKey:'', genreMapMovie:{}, genreMapTv:{}, partnerLabel:'Hilda', theme:'paper', lowDataMode:false });
+  if(!state.settings.tmdbKey) state.settings.tmdbKey = DEFAULT_TMDB_KEY;
   if(!state.settings.partnerLabel || state.settings.partnerLabel==='With Hilda') state.settings.partnerLabel = 'Hilda';
   if(!state.settings.genreMapMovie) state.settings.genreMapMovie = state.settings.genreMap || {};
   if(!state.settings.genreMapTv) state.settings.genreMapTv = {};
+  if(!state.settings.theme) state.settings.theme = 'paper';
+  if(state.settings.lowDataMode===undefined) state.settings.lowDataMode = false;
+  document.documentElement.setAttribute('data-theme', state.settings.theme);
+  try{ localStorage.setItem('reellog:themeCache', state.settings.theme); }catch(e){}
+  applyThemeChrome(state.settings.theme);
   if(state.watchlists.length===0){
     state.watchlists.push({id:uid(), name:'Want to Watch', items:[]});
   }
   state.wlActive = state.watchlists[0].id;
   state.loaded = true;
+  state.locked = localStorage.getItem('reellog:unlocked')!=='true';
   render();
+  if(state.settings.tmdbKey && Object.keys(state.settings.genreMapMovie).length===0){
+    tmdbGenres();
+  }
+}
+
+async function sha256Hex(str){
+  const enc = new TextEncoder().encode(str);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
 }
 
 /* ---------------- TMDB ---------------- */
@@ -301,13 +476,39 @@ const ICON = {
 };
 
 /* ---------------- render root ---------------- */
+function renderLockScreen(app){
+  app.innerHTML = `
+  <div class="lockscreen">
+    <h1>Our Watch History</h1>
+    <div class="sub">Enter passcode</div>
+    <input type="password" inputmode="numeric" id="lock-input" maxlength="12" autofocus/>
+    <div class="err" id="lock-err"></div>
+    <button class="btn" id="lock-submit">Unlock</button>
+  </div>`;
+  const submit = async ()=>{
+    const val = document.getElementById('lock-input').value;
+    const hash = await sha256Hex(val);
+    if(APP_PASSCODE_HASHES.includes(hash)){
+      localStorage.setItem('reellog:unlocked','true');
+      state.locked = false;
+      render();
+    } else {
+      document.getElementById('lock-err').textContent = 'Incorrect passcode';
+      document.getElementById('lock-input').value = '';
+    }
+  };
+  document.getElementById('lock-submit').onclick = submit;
+  document.getElementById('lock-input').onkeydown = (e)=>{ if(e.key==='Enter') submit(); };
+}
+
 function render(){
   const app = document.getElementById('app');
   if(!state.loaded){ app.innerHTML = `<div class="empty">Loading…</div>`; return; }
+  if(state.locked){ renderLockScreen(app); return; }
   app.innerHTML = `
     <div class="topbar">
-      <h1>${state.tab==='watched'?'Reel Log':state.tab==='watchlist'?'Want to Watch':'Settings'}</h1>
-      <div class="sub">${state.tab==='watched' ? state.movies.length+' films logged' : state.tab==='watchlist' ? 'saved for later' : 'bailey & hilda'}</div>
+      <h1>${state.tab==='watched'?'Our Watch History':state.tab==='watchlist'?'Want to Watch':'Settings'}</h1>
+      <div class="sub">${state.tab==='watched' ? `${state.movies.length} film${state.movies.length===1?'':'s'} logged${totalWatchTimeLabel()?' · '+totalWatchTimeLabel():''}` : state.tab==='watchlist' ? 'saved for later' : 'bailey & hilda'}</div>
     </div>
     <div class="content" id="content"></div>
     ${state.tab==='watched' ? `<button class="fab" id="fab-add">+ Log</button>` : ''}
@@ -318,12 +519,14 @@ function render(){
     </div></div>
     ${state.modal ? renderModal() : ''}
     ${state.filterPopupOpen ? renderFilterPopup() : ''}
+    ${state.fixModal ? renderFixModal() : ''}
   `;
   renderContent();
   bindNav();
   if(state.tab==='watched'){ document.getElementById('fab-add').onclick = ()=>openAddModal(); }
   if(state.modal) bindModal();
   if(state.filterPopupOpen) bindFilterPopup();
+  if(state.fixModal) bindFixModal();
 }
 
 function bindNav(){
@@ -339,17 +542,54 @@ function renderContent(){
   if(state.tab==='watchlist') return renderWatchlist(c);
   if(state.tab==='settings') return renderSettings(c);
   if(state.tab==='prelogged') return renderPrelogged(c);
+  if(state.tab==='reviewqueue') return renderReviewQueue(c);
 }
 
 function isTogether(m){ return m.watchedWith==='together' || m.watchedWith==='hilda' || m.watchedWith==='other'; }
+
+function posterUrl(url, forceSmall){
+  if(!url) return url;
+  if(forceSmall) return url.replace('/w342/', '/w92/');
+  if(state.settings.lowDataMode) return url.replace('/w342/', '/w154/');
+  return url;
+}
+function applyThemeChrome(theme){
+  const dark = theme==='midnight' || theme==='noir';
+  const bg = {paper:'#f3efe6', midnight:'#14161f', noir:'#0b0b0c', sepia:'#efe3ce'}[theme] || '#f3efe6';
+  const themeMeta = document.querySelector('meta[name="theme-color"]');
+  if(themeMeta) themeMeta.setAttribute('content', bg);
+  const statusMeta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+  if(statusMeta) statusMeta.setAttribute('content', dark ? 'black-translucent' : 'default');
+}
+
+function totalWatchTimeLabel(){
+  const totalMin = state.movies.filter(m=>m.completed).reduce((sum,m)=>sum+(m.runtimeMinutes||0),0);
+  if(totalMin<=0) return '';
+  const h = Math.floor(totalMin/60), m = totalMin%60;
+  return `${h}h ${m}m watched`;
+}
+
+async function tmdbRuntime(id, mediaType){
+  if(!state.settings.tmdbKey) return 0;
+  try{
+    const endpoint = mediaType==='tv' ? 'tv' : 'movie';
+    const res = await fetch(`https://api.themoviedb.org/3/${endpoint}/${id}?api_key=${state.settings.tmdbKey}`);
+    const d = await res.json();
+    if(mediaType==='tv'){
+      const perEp = (d.episode_run_time && d.episode_run_time[0]) || 0;
+      const episodes = d.number_of_episodes || 0;
+      return perEp * episodes;
+    }
+    return d.runtime || 0;
+  }catch(e){ return 0; }
+}
 function togetherName(m){ return m.watchedWithOther || (m.watchedWith==='hilda' ? (state.settings.partnerLabel||'Hilda') : 'Together'); }
 
 function filteredMovies(){
-  let list = [...state.movies];
+  let list = state.movies.filter(m=>!m.needsReview);
   if(state.typeFilter!=='all') list = list.filter(m=>(m.mediaType||'movie')===state.typeFilter);
   if(state.watchedFilter==='together') list = list.filter(m=>isTogether(m));
   if(state.watchedFilter==='alone') list = list.filter(m=>m.watchedWith==='alone');
-  if(state.watchedFilter==='review') list = list.filter(m=>m.needsReview);
   if(state.wf.genre) list = list.filter(m=>(m.genres||[]).includes(state.wf.genre));
   if(state.wf.status==='partial') list = list.filter(m=>!m.completed);
   if(state.wf.status==='complete') list = list.filter(m=>m.completed);
@@ -437,9 +677,10 @@ function renderWatched(c){
       <button class="pill ${state.watchedFilter==='together'?'active':''}" data-f="together">Together</button>
       <button class="pill ${state.watchedFilter==='alone'?'active':''}" data-f="alone">Watched Alone</button>
       <button class="pill ${hasExtra?'active':''}" id="open-filters">Filter${hasExtra?' •':''}</button>
-      ${reviewCount>0?`<button class="pill ${state.watchedFilter==='review'?'active':''}" data-f="review" style="border-color:var(--accent);color:var(--accent);">⚑ Needs review (${reviewCount})</button>`:''}
+      ${reviewCount>0?`<button class="pill" id="goto-review" style="border-color:var(--accent);color:var(--accent);">⚑ ${reviewCount} to review</button>`:''}
     </div>
     <div class="pillrow" style="justify-content:flex-end;">
+      ${state.selectMode ? `<button class="pill" id="select-all">${list.length>0 && list.every(m=>state.selectedIds.has(m.id))?'Deselect all':'Select all'}</button>` : ''}
       <button class="pill ${state.selectMode?'active':''}" id="toggle-select">${state.selectMode?'Cancel select':'Select'}</button>
     </div>
     ${densityToggleHtml()}
@@ -448,6 +689,7 @@ function renderWatched(c){
     ${state.selectMode && state.selectedIds.size>0 ? `
     <div class="selectbar"><div class="selectbar-inner">
       <span>${state.selectedIds.size} selected</span>
+      <button class="btn secondary" id="bulk-review" style="padding:8px 12px;">Review</button>
       <button class="btn danger" id="bulk-delete" style="padding:8px 12px;">Delete</button>
     </div></div>` : ''}
   `;
@@ -460,15 +702,33 @@ function renderWatched(c){
     render();
   });
   document.getElementById('open-filters').onclick = ()=>{ state.filterPopupOpen = true; render(); };
+  if(document.getElementById('goto-review')) document.getElementById('goto-review').onclick = ()=>{ state.tab='reviewqueue'; render(); };
   document.getElementById('toggle-select').onclick = ()=>{
     state.selectMode = !state.selectMode;
     state.selectedIds = new Set();
     render();
   };
+  if(document.getElementById('select-all')) document.getElementById('select-all').onclick = ()=>{
+    if(list.length>0 && list.every(m=>state.selectedIds.has(m.id))){
+      state.selectedIds = new Set();
+    } else {
+      state.selectedIds = new Set(list.map(m=>m.id));
+    }
+    render();
+  };
   if(document.getElementById('bulk-delete')) document.getElementById('bulk-delete').onclick = async ()=>{
     if(!confirm(`Delete ${state.selectedIds.size} entr${state.selectedIds.size===1?'y':'ies'} for good?`)) return;
+    const ids = [...state.selectedIds];
     state.movies = state.movies.filter(m=>!state.selectedIds.has(m.id));
-    await sSet('movies', state.movies);
+    await batchDeleteMovies(ids);
+    state.selectedIds = new Set();
+    state.selectMode = false;
+    render();
+  };
+  if(document.getElementById('bulk-review')) document.getElementById('bulk-review').onclick = async ()=>{
+    const ids = [...state.selectedIds];
+    state.movies.forEach(m=>{ if(state.selectedIds.has(m.id)) m.needsReview = true; });
+    await batchPatchMovies(ids, {needsReview:true});
     state.selectedIds = new Set();
     state.selectMode = false;
     render();
@@ -499,13 +759,13 @@ function movieCard(m){
     else if(m.timeStopped) progress = `<span class="tag mark">Stopped at ${escapeHtml(m.timeStopped)}</span>`;
     else progress = `<span class="tag mark">In progress</span>`;
   }
-  const marks = [m.needsReview?'<span class="tag mark">⚑ Review</span>':'', progress, m.isRewatch?'<span class="tag mark">Rewatch</span>':'', m.favorite?'<span class="tag mark">★ Favorite</span>':''].filter(Boolean);
+  const marks = [progress, m.isRewatch?'<span class="tag mark">Rewatch</span>':'', m.favorite?'<span class="tag mark">★ Favorite</span>':'', (m.reviewBailey||m.reviewHilda)?'<span class="tag mark">📝 Review</span>':''].filter(Boolean);
   const typeTag = m.mediaType==='tv' ? '<span class="tag">TV</span>' : '';
   const selected = state.selectedIds.has(m.id);
   return `
   <div class="gridcard ${state.selectMode?'selectable':''} ${selected?'selected':''}" data-open="${m.id}">
     ${state.selectMode?`<div class="selectdot">${selected?'✓':''}</div>`:''}
-    <div class="poster">${m.poster ? `<img src="${m.poster}"/>` : `<div class="noimg">🎬</div>`}</div>
+    <div class="poster">${m.poster ? `<img src="${posterUrl(m.poster)}" loading="lazy"/>` : `<div class="noimg">🎬</div>`}</div>
     <div class="cap">
       <h3>${escapeHtml(m.title)} ${m.year?`<em>'${String(m.year).slice(2)}</em>`:''}</h3>
       <div class="meta">${[typeTag,dateStr,withTag].filter(Boolean).join(' · ')}${marks.length?' · '+marks.join(' · '):''}</div>
@@ -534,6 +794,7 @@ let wlQuickType = 'movie';
 function renderWatchlist(c){
   const active = state.watchlists.find(l=>l.id===state.wlActive) || state.watchlists[0];
   const reviewCount = active.items.filter(i=>i.needsReview).length;
+  const visibleItems = active.items.filter(i=>!i.needsReview);
   c.innerHTML = `
     <div class="seg" style="margin-bottom:8px;">
       <button class="seg-btn ${wlQuickType==='movie'?'active':''}" data-qt="movie">Movie</button>
@@ -551,35 +812,38 @@ function renderWatchlist(c){
       <div style="display:flex;gap:8px;">
         <button class="pill ${state.wlView==='grid'?'active':''}" data-view="grid">Grid</button>
         <button class="pill ${state.wlView==='swipe'?'active':''}" data-view="swipe">Swipe</button>
-        ${reviewCount>0?`<span class="pill" style="border-color:var(--accent);color:var(--accent);pointer-events:none;">⚑ ${reviewCount} to review</span>`:''}
+        ${reviewCount>0?`<button class="pill" id="goto-review" style="border-color:var(--accent);color:var(--accent);">⚑ ${reviewCount} to review</button>`:''}
       </div>
-      ${state.wlView==='grid' ? `<button class="pill ${state.selectMode?'active':''}" id="toggle-select">${state.selectMode?'Cancel':'Select'}</button>` : ''}
+      ${state.wlView==='grid' ? `<div style="display:flex;gap:8px;">
+        ${state.selectMode ? `<button class="pill" id="select-all-wl">${visibleItems.length>0 && visibleItems.every(i=>state.selectedIds.has(i.id))?'Deselect all':'Select all'}</button>` : ''}
+        <button class="pill ${state.selectMode?'active':''}" id="toggle-select">${state.selectMode?'Cancel':'Select'}</button>
+      </div>` : ''}
     </div>
     ${state.wlView==='grid' ? densityToggleHtml() : ''}
-    ${active.items.length===0 ? `<div class="empty"><b>List is empty</b>Search a title above to add it.</div>` :
+    ${visibleItems.length===0 ? `<div class="empty"><b>List is empty</b>Search a title above to add it.</div>` :
       state.wlView==='swipe' ? `
-      <div class="swipe-hint">← Swipe through ${active.items.length} title${active.items.length===1?'':'s'} →</div>
-      <div class="swipe-wrap">${active.items.map(it=>`
+      <div class="swipe-hint">← Swipe through ${visibleItems.length} title${visibleItems.length===1?'':'s'} →</div>
+      <div class="swipe-wrap">${visibleItems.map(it=>`
       <div class="swipe-card">
-        <div class="poster">${it.poster?`<img src="${it.poster}"/>`:`<div class="noimg">🎬</div>`}</div>
+        <div class="poster">${it.poster?`<img src="${posterUrl(it.poster)}" loading="lazy"/>`:`<div class="noimg">🎬</div>`}</div>
         <div class="cap">
           <h3>${escapeHtml(it.title)} ${it.year?`<em style="color:var(--ink-soft);font-weight:400;">'${String(it.year).slice(2)}</em>`:''}</h3>
-          <div class="meta">${[it.mediaType==='tv'?'TV':'Movie', it.needsReview?'⚑ Review':'', (it.genres||[]).slice(0,2).join(' · ')].filter(Boolean).join(' · ')}</div>
+          <div class="meta">${[it.mediaType==='tv'?'TV':'Movie', (it.genres||[]).slice(0,2).join(' · ')].filter(Boolean).join(' · ')}</div>
           <div class="actions">
             <button class="btn block" data-watch="${it.id}" style="padding:10px;">Mark watched</button>
             <button class="btn secondary block" data-remove="${it.id}" style="padding:10px;">Remove</button>
           </div>
         </div>
       </div>`).join('')}</div>` :
-      `<div class="grid cols-${state.gridCols}">${active.items.map(it=>{
+      `<div class="grid cols-${state.gridCols}">${visibleItems.map(it=>{
         const sel = state.selectedIds.has(it.id);
         return `
       <div class="gridcard ${state.selectMode?'selectable':''} ${sel?'selected':''}" data-item="${it.id}">
         ${state.selectMode?`<div class="selectdot">${sel?'✓':''}</div>`:''}
-        <div class="poster">${it.poster?`<img src="${it.poster}"/>`:`<div class="noimg">🎬</div>`}</div>
+        <div class="poster">${it.poster?`<img src="${posterUrl(it.poster)}" loading="lazy"/>`:`<div class="noimg">🎬</div>`}</div>
         <div class="cap">
           <h3>${escapeHtml(it.title)} ${it.year?`<em>'${String(it.year).slice(2)}</em>`:''}</h3>
-          <div class="meta">${[it.mediaType==='tv'?'TV':'', it.needsReview?'<span class="tag mark">⚑</span>':'', (it.genres||[]).slice(0,2).join(' · ')].filter(Boolean).join(' · ')}</div>
+          <div class="meta">${[it.mediaType==='tv'?'TV':'', (it.genres||[]).slice(0,2).join(' · ')].filter(Boolean).join(' · ')}</div>
           ${!state.selectMode?`<div class="actions">
             <button class="btn" data-watch="${it.id}" style="padding:8px 10px;font-size:10px;">Mark watched</button>
             <button class="btn secondary" data-remove="${it.id}" style="padding:8px 10px;font-size:10px;">Remove</button>
@@ -589,13 +853,23 @@ function renderWatchlist(c){
     ${state.wlView==='grid' && state.selectMode && state.selectedIds.size>0 ? `
     <div class="selectbar"><div class="selectbar-inner">
       <span>${state.selectedIds.size} selected</span>
+      <button class="btn secondary" id="bulk-review-wl" style="padding:8px 12px;">Review</button>
       <button class="btn danger" id="bulk-delete-wl" style="padding:8px 12px;">Delete</button>
     </div></div>` : ''}
   `;
   bindDensityToggle(c);
   c.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{ state.wlView = b.dataset.view; render(); });
+  if(document.getElementById('goto-review')) document.getElementById('goto-review').onclick = ()=>{ state.tab='reviewqueue'; render(); };
   if(document.getElementById('toggle-select')) document.getElementById('toggle-select').onclick = ()=>{
     state.selectMode = !state.selectMode; state.selectedIds = new Set(); render();
+  };
+  if(document.getElementById('select-all-wl')) document.getElementById('select-all-wl').onclick = ()=>{
+    if(visibleItems.length>0 && visibleItems.every(i=>state.selectedIds.has(i.id))){
+      state.selectedIds = new Set();
+    } else {
+      state.selectedIds = new Set(visibleItems.map(i=>i.id));
+    }
+    render();
   };
   c.querySelectorAll('[data-item]').forEach(card=>card.onclick=()=>{
     if(!state.selectMode) return;
@@ -603,6 +877,12 @@ function renderWatchlist(c){
     if(state.selectedIds.has(id)) state.selectedIds.delete(id); else state.selectedIds.add(id);
     render();
   });
+  if(document.getElementById('bulk-review-wl')) document.getElementById('bulk-review-wl').onclick = async ()=>{
+    active.items.forEach(i=>{ if(state.selectedIds.has(i.id)) i.needsReview = true; });
+    await sSet('watchlists', state.watchlists);
+    state.selectedIds = new Set(); state.selectMode = false;
+    render();
+  };
   if(document.getElementById('bulk-delete-wl')) document.getElementById('bulk-delete-wl').onclick = async ()=>{
     if(!confirm(`Remove ${state.selectedIds.size} title${state.selectedIds.size===1?'':'s'} from this list?`)) return;
     active.items = active.items.filter(i=>!state.selectedIds.has(i.id));
@@ -645,6 +925,7 @@ async function quickAddToWatchlist(listId){
 
 /* ---------------- SETTINGS TAB ---------------- */
 function renderSettings(c){
+  const reviewTotal = state.movies.filter(m=>m.needsReview).length + state.watchlists.reduce((n,l)=>n+l.items.filter(i=>i.needsReview).length,0);
   c.innerHTML = `
     <div class="stat-row">
       <div class="stat"><b>${state.movies.length}</b><span>Total logged</span></div>
@@ -652,14 +933,42 @@ function renderSettings(c){
       <div class="stat"><b>${state.movies.filter(m=>m.favorite).length}</b><span>Favorites</span></div>
     </div>
     <div class="settings-section">
+      <h3>Appearance</h3>
+      <div class="hint" style="margin-bottom:10px;">Pick a look for the app. Applies instantly on this device.</div>
+      <div class="theme-grid">
+        ${[
+          {id:'paper', label:'Paper', swatch:['#f3efe6','#cf3f26','#18150f']},
+          {id:'midnight', label:'Midnight', swatch:['#14161f','#e3583f','#f2efe9']},
+          {id:'noir', label:'Noir', swatch:['#0b0b0c','#d4af37','#f1ede2']},
+          {id:'sepia', label:'Sepia', swatch:['#efe3ce','#a8461f','#3c2e20']},
+        ].map(t=>`
+        <button class="theme-swatch ${state.settings.theme===t.id?'active':''}" data-theme-pick="${t.id}">
+          <span class="swatch-preview" style="background:${t.swatch[0]};"><span style="background:${t.swatch[1]};"></span><span style="background:${t.swatch[2]};"></span></span>
+          <span>${t.label}</span>
+        </button>`).join('')}
+      </div>
+    </div>
+    <div class="settings-section">
+      <h3>Low data mode</h3>
+      <div class="hint" style="margin-bottom:10px;">Loads smaller poster images to use less data — handy on mobile or a limited plan. A small quality trade-off, worth testing to see if it's noticeable.</div>
+      <div class="toggle-line" style="margin-bottom:0;">
+        <span>Low data mode</span>
+        <div class="switch ${state.settings.lowDataMode?'on':''}" id="tog-lowdata"></div>
+      </div>
+    </div>
+    <div class="settings-section">
+      <h3>App lock</h3>
+      <div class="hint" style="margin-bottom:10px;">The passcode is fixed for this app — same one on every device, baked in so reinstalling never loses it. This device stays unlocked until you log out.</div>
+      <button class="btn secondary block" id="logout-lock">Log out</button>
+    </div>
+    <div class="settings-section">
       <h3>Cloud sync</h3>
       ${fbReady ? `
       <div class="hint" style="color:var(--teal);margin-bottom:10px;">Connected — your log syncs across every device you connect the same way.</div>
-      <button class="btn secondary block" id="disconnect-fb">Disconnect this device</button>
+      <div class="hint" style="color:var(--teal);margin-bottom:10px;">Connected automatically — your log syncs across every device that opens this app.</div>
       ` : `
-      <div class="hint" style="margin-bottom:10px;">Paste your Firebase project config below to sync your log between your and Hilda's devices instead of keeping it only on this one. See the message from Claude for how to create a free Firebase project.</div>
-      <div class="field"><textarea id="fb-config" rows="5" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...", ...}'></textarea></div>
-      <button class="btn block" id="connect-fb">Connect</button>
+      <div class="hint" style="margin-bottom:10px;">Couldn't connect to the sync database — check your internet connection.</div>
+      <button class="btn block" id="retry-fb">Retry connection</button>
       `}
     </div>
     <div class="settings-section">
@@ -677,6 +986,11 @@ function renderSettings(c){
     <div class="settings-section">
       <h3>Watch lists</h3>
       ${state.watchlists.map(l=>`<div class="listrow"><span>${escapeHtml(l.name)} (${l.items.length})</span><span><button class="iconbtn" data-rename="${l.id}">Rename</button>${state.watchlists.length>1?`<button class="iconbtn" data-dellist="${l.id}">Delete</button>`:''}</span></div>`).join('')}
+    </div>
+    <div class="settings-section">
+      <h3>Needs review</h3>
+      <div class="hint" style="margin-bottom:10px;">Titles flagged from batch import or marked for review — hidden from your Watched log and watchlists until you confirm or fix them here.</div>
+      <button class="btn secondary block" id="goto-review">Open review queue${reviewTotal>0?` (${reviewTotal})`:''} →</button>
     </div>
     <div class="settings-section">
       <h3>Batch import</h3>
@@ -713,35 +1027,30 @@ function renderSettings(c){
     render();
   };
   document.getElementById('goto-prelogged').onclick = ()=>{ state.tab='prelogged'; render(); };
-  if(document.getElementById('connect-fb')){
-    document.getElementById('connect-fb').onclick = async ()=>{
-      let cfg;
-      try{ cfg = JSON.parse(document.getElementById('fb-config').value.trim()); }
-      catch(e){ alert('That doesn\'t look like valid config JSON — paste the whole snippet from Firebase.'); return; }
-      try{
-        initFirebase(cfg);
-        localStorage.setItem('reellog:firebaseConfig', JSON.stringify(cfg));
-        const snap = await fbDb.collection('reellog').doc('shared').get();
-        if(!snap.exists){
-          // first device to connect — push this device's existing log up as the starting point
-          await fbDb.collection('reellog').doc('shared').set({movies:state.movies, watchlists:state.watchlists, settings:state.settings});
-        } else {
-          const data = snap.data();
-          state.movies = data.movies || [];
-          state.watchlists = data.watchlists && data.watchlists.length ? data.watchlists : state.watchlists;
-          state.settings = data.settings || state.settings;
-        }
-        alert('Connected. This log now syncs through Firebase.');
-        render();
-      }catch(e){ alert('Could not connect — double check the config and that Firestore is enabled.'); }
+  document.getElementById('goto-review').onclick = ()=>{ state.tab='reviewqueue'; render(); };
+  c.querySelectorAll('[data-theme-pick]').forEach(b=>b.onclick=async ()=>{
+    state.settings.theme = b.dataset.themePick;
+    document.documentElement.setAttribute('data-theme', state.settings.theme);
+    applyThemeChrome(state.settings.theme);
+    try{ localStorage.setItem('reellog:themeCache', state.settings.theme); }catch(e){}
+    await sSet('settings', state.settings);
+    render();
+  });
+  if(document.getElementById('tog-lowdata')) document.getElementById('tog-lowdata').onclick = async ()=>{
+    state.settings.lowDataMode = !state.settings.lowDataMode;
+    await sSet('settings', state.settings);
+    render();
+  };
+  if(document.getElementById('logout-lock')){
+    document.getElementById('logout-lock').onclick = ()=>{
+      localStorage.removeItem('reellog:unlocked');
+      state.locked = true;
+      render();
     };
   }
-  if(document.getElementById('disconnect-fb')){
-    document.getElementById('disconnect-fb').onclick = ()=>{
-      if(!confirm('Stop syncing on this device? Your data stays in Firebase, but this device will go back to its own local copy.')) return;
-      localStorage.removeItem('reellog:firebaseConfig');
-      fbReady = false; fbDb = null;
-      alert('Disconnected. Reload the page to continue with local storage.');
+  if(document.getElementById('retry-fb')){
+    document.getElementById('retry-fb').onclick = ()=>{
+      initFirebase(DEFAULT_FIREBASE_CONFIG);
       render();
     };
   }
@@ -761,7 +1070,7 @@ function renderSettings(c){
       const data = JSON.parse(text);
       if(data.movies) state.movies = data.movies;
       if(data.watchlists) state.watchlists = data.watchlists;
-      await sSet('movies', state.movies);
+      await batchSaveMovies(state.movies);
       await sSet('watchlists', state.watchlists);
       alert('Imported.'); render();
     }catch(err){ alert('That file could not be read.'); }
@@ -820,6 +1129,7 @@ async function runBatchImport(){
   if(!lines.length) return;
   if(!state.settings.tmdbKey){ alert('Add your TMDB API key in Settings first.'); return; }
   batchState.running = true; batchState.log = []; render();
+  const newMovies = [];
   for(const line of lines){
     const yearMatch = line.match(/\((\d{4})\)/);
     const cleanQuery = line.replace(/\(\d{4}\)/,'').trim();
@@ -834,13 +1144,16 @@ async function runBatchImport(){
         if(list) list.items.push({ id:uid(), tmdbId:pick.id, mediaType:pick.mediaType, title:pick.title, year:pick.year, poster:pick.poster, genres:genreNames(pick.genreIds,pick.mediaType), needsReview:true });
       } else {
         const dupe = state.movies.find(m=>m.tmdbId===pick.id && m.mediaType===pick.mediaType);
-        state.movies.push({
-          id:uid(), tmdbId:pick.id, mediaType:pick.mediaType, title:pick.title, year:pick.year, poster:pick.poster, genres:genreNames(pick.genreIds,pick.mediaType),
+        const runtimeMinutes = await tmdbRuntime(pick.id, pick.mediaType);
+        const newMovie = {
+          id:uid(), tmdbId:pick.id, mediaType:pick.mediaType, title:pick.title, year:pick.year, poster:pick.poster, genres:genreNames(pick.genreIds,pick.mediaType), runtimeMinutes,
           preLogged:true, startDate:null, startTime:null, endDate:null, endTime:null,
           watchedWith: batchState.withHilda?'together':'alone', watchedWithOther: batchState.withHilda?(batchState.togetherName||state.settings.partnerLabel):'',
           isRewatch: !!dupe, favorite:false, completed:true, timeStopped:'', sceneNote:'', lastSeason:null, lastEpisode:null,
           tags:'', ratingBailey:null, ratingHilda:null, location:'', locationOther:'', needsReview:true
-        });
+        };
+        state.movies.push(newMovie);
+        newMovies.push(newMovie);
       }
       batchState.log.push({line, ok:true, title:pick.title, mediaType:pick.mediaType});
     } else {
@@ -848,10 +1161,125 @@ async function runBatchImport(){
     }
     render();
   }
-  await sSet('movies', state.movies);
+  await batchSaveMovies(newMovies);
   await sSet('watchlists', state.watchlists);
   batchState.running = false;
   render();
+}
+
+/* ---------------- REVIEW QUEUE (Settings tab) ---------------- */
+function renderReviewQueue(c){
+  const movies = state.movies.filter(m=>m.needsReview);
+  const wlItems = [];
+  state.watchlists.forEach(l=>l.items.forEach(i=>{ if(i.needsReview) wlItems.push({...i, listId:l.id, listName:l.name}); }));
+  c.innerHTML = `
+    <button class="btn secondary" id="back-settings" style="margin-bottom:14px;">← Back to Settings</button>
+    <div class="hint" style="margin-bottom:14px;">Titles here are hidden from your Watched log and watchlists until confirmed or fixed.</div>
+    ${movies.length===0 && wlItems.length===0 ? `<div class="empty"><b>All clear</b>Nothing waiting on review.</div>` : ''}
+    ${movies.length ? `<div class="settings-section"><h3>Watched log (${movies.length})</h3>
+      ${movies.map(m=>`<div class="listrow"><span>${escapeHtml(m.title)} ${m.year?`(${m.year})`:''} · ${m.mediaType==='tv'?'TV':'Movie'}</span><span><button class="iconbtn" data-fixmovie="${m.id}">Fix</button><button class="iconbtn" data-delmovie="${m.id}">Delete</button></span></div>`).join('')}
+    </div>` : ''}
+    ${wlItems.length ? `<div class="settings-section"><h3>Watchlists (${wlItems.length})</h3>
+      ${wlItems.map(i=>`<div class="listrow"><span>${escapeHtml(i.title)} ${i.year?`(${i.year})`:''} · ${i.mediaType==='tv'?'TV':'Movie'} · ${escapeHtml(i.listName)}</span><span><button class="iconbtn" data-fixwl="${i.id}" data-list="${i.listId}">Fix</button><button class="iconbtn" data-delwl="${i.id}" data-list="${i.listId}">Delete</button></span></div>`).join('')}
+    </div>` : ''}
+  `;
+  document.getElementById('back-settings').onclick = ()=>{ state.tab='settings'; render(); };
+  c.querySelectorAll('[data-fixmovie]').forEach(b=>b.onclick=()=>{ openAddModal(state.movies.find(m=>m.id===b.dataset.fixmovie)); });
+  c.querySelectorAll('[data-delmovie]').forEach(b=>b.onclick=async ()=>{
+    if(!confirm('Delete this entry for good?')) return;
+    state.movies = state.movies.filter(m=>m.id!==b.dataset.delmovie);
+    await deleteMovieRemote(b.dataset.delmovie); render();
+  });
+  c.querySelectorAll('[data-fixwl]').forEach(b=>b.onclick=()=>{ openFixModal(b.dataset.fixwl, b.dataset.list); });
+  c.querySelectorAll('[data-delwl]').forEach(b=>b.onclick=async ()=>{
+    if(!confirm('Delete this item?')) return;
+    const list = state.watchlists.find(l=>l.id===b.dataset.list);
+    list.items = list.items.filter(i=>i.id!==b.dataset.delwl);
+    await sSet('watchlists', state.watchlists); render();
+  });
+}
+
+function openFixModal(itemId, listId){
+  const list = state.watchlists.find(l=>l.id===listId);
+  const item = list.items.find(i=>i.id===itemId);
+  state.fixModal = { itemId, listId, type: item.mediaType||'movie', current: item };
+  render();
+}
+
+function renderFixModal(){
+  const fm = state.fixModal;
+  return `
+  <div class="modal-backdrop" id="fix-backdrop">
+    <div class="modal" style="position:relative;">
+      <button class="modal-close" id="fix-close">✕</button>
+      <h2>Fix match</h2>
+      <div class="selectedmovie">
+        ${fm.current.poster?`<img src="${posterUrl(fm.current.poster)}" loading="lazy"/>`:''}
+        <div style="flex:1;"><h3 style="margin:0;font-family:var(--display);font-style:italic;">${escapeHtml(fm.current.title)}</h3><div class="hint">Currently logged as ${fm.current.mediaType==='tv'?'a TV show':'a movie'}${fm.current.year?' · '+fm.current.year:''}</div></div>
+      </div>
+      <button class="btn secondary block" id="fix-correct" style="margin:14px 0;">This match is correct</button>
+      <div class="field">
+        <label>Or search for the right one</label>
+        <div class="seg" style="margin-bottom:8px;">
+          <button class="seg-btn ${fm.type==='movie'?'active':''}" data-fmt="movie">Movie</button>
+          <button class="seg-btn ${fm.type==='tv'?'active':''}" data-fmt="tv">TV Show</button>
+        </div>
+        <input type="text" id="fix-search" placeholder="Search title…"/>
+        <div class="searchresults" id="fix-results"></div>
+      </div>
+      <button class="btn danger block" id="fix-delete" style="margin-top:10px;">Delete this item</button>
+    </div>
+  </div>`;
+}
+
+function bindFixModal(){
+  const fm = state.fixModal;
+  const close = ()=>{ state.fixModal=null; render(); };
+  document.getElementById('fix-backdrop').onclick = (e)=>{ if(e.target.id==='fix-backdrop') close(); };
+  document.getElementById('fix-close').onclick = close;
+  document.querySelectorAll('[data-fmt]').forEach(b=>b.onclick=()=>{ fm.type=b.dataset.fmt; render(); });
+  document.getElementById('fix-correct').onclick = async ()=>{
+    const list = state.watchlists.find(l=>l.id===fm.listId);
+    const item = list.items.find(i=>i.id===fm.itemId);
+    item.needsReview = false;
+    await sSet('watchlists', state.watchlists);
+    close();
+  };
+  document.getElementById('fix-delete').onclick = async ()=>{
+    if(!confirm('Delete this item?')) return;
+    const list = state.watchlists.find(l=>l.id===fm.listId);
+    list.items = list.items.filter(i=>i.id!==fm.itemId);
+    await sSet('watchlists', state.watchlists);
+    close();
+  };
+  const input = document.getElementById('fix-search');
+  let timer;
+  input.oninput = ()=>{
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if(q.length<2){ document.getElementById('fix-results').innerHTML=''; return; }
+    timer = setTimeout(async ()=>{
+      const res = await tmdbSearch(q, fm.type);
+      const box = document.getElementById('fix-results');
+      if(res.error){ box.innerHTML = `<div class="hint">Search failed — check your API key or connection.</div>`; return; }
+      box.innerHTML = res.results.slice(0,8).map(r=>`
+        <div class="sr-item" data-pick='${r.id}'>
+          ${r.poster?`<img src="${posterUrl(r.poster,true)}" loading="lazy"/>`:'<div class="noimg" style="width:38px;height:57px;">🎬</div>'}
+          <div><div class="t">${escapeHtml(r.title)}</div><div class="y">${r.year||'—'}</div></div>
+        </div>`).join('');
+      box.querySelectorAll('[data-pick]').forEach(el=>{
+        el.onclick = async ()=>{
+          const r = res.results.find(x=>x.id==el.dataset.pick);
+          const list = state.watchlists.find(l=>l.id===fm.listId);
+          const item = list.items.find(i=>i.id===fm.itemId);
+          item.tmdbId=r.id; item.mediaType=fm.type; item.title=r.title; item.year=r.year; item.poster=r.poster; item.genres=genreNames(r.genreIds, fm.type);
+          item.needsReview=false;
+          await sSet('watchlists', state.watchlists);
+          close();
+        };
+      });
+    }, 400);
+  };
 }
 
 /* ---------------- ADD/EDIT MOVIE MODAL ---------------- */
@@ -860,7 +1288,7 @@ function openAddModal(existing, fromWatchlistItem, fromWatchlistId){
   addModalType = existing ? (existing.mediaType||'movie') : fromWatchlistItem ? (fromWatchlistItem.mediaType||'movie') : 'movie';
   state.modal = {
     editingId: existing? existing.id : null,
-    selected: existing ? { id:existing.tmdbId, mediaType:existing.mediaType||'movie', title:existing.title, year:existing.year, poster:existing.poster, genres:existing.genres } :
+    selected: existing ? { id:existing.tmdbId, mediaType:existing.mediaType||'movie', title:existing.title, year:existing.year, poster:existing.poster, genres:existing.genres, runtimeMinutes:existing.runtimeMinutes } :
                fromWatchlistItem ? { id:fromWatchlistItem.tmdbId, mediaType:fromWatchlistItem.mediaType||'movie', title:fromWatchlistItem.title, year:fromWatchlistItem.year, poster:fromWatchlistItem.poster, genres:fromWatchlistItem.genres } : null,
     fromWatchlistId: fromWatchlistId || null,
     fromWatchlistItemId: fromWatchlistItem ? fromWatchlistItem.id : null,
@@ -875,6 +1303,7 @@ function openAddModal(existing, fromWatchlistItem, fromWatchlistId){
       completed: existing.completed!==false, timeStopped: existing.timeStopped||'', sceneNote: existing.sceneNote||'',
       lastSeason: existing.lastSeason||'', lastEpisode: existing.lastEpisode||'',
       ratingBailey: existing.ratingBailey||'', ratingHilda: existing.ratingHilda||'',
+      reviewBailey: existing.reviewBailey||'', reviewHilda: existing.reviewHilda||'',
       isRewatch: existing.isRewatch||false
     } : {
       preLogged:false, multiSession:false,
@@ -882,7 +1311,7 @@ function openAddModal(existing, fromWatchlistItem, fromWatchlistId){
       endDate:'', endTime:'',
       watchedWith:'alone', watchedWithOther:'', location:'', locationOther:'',
       favorite:false, tags:'', completed:true, timeStopped:'', sceneNote:'', lastSeason:'', lastEpisode:'',
-      ratingBailey:'', ratingHilda:'', isRewatch:false
+      ratingBailey:'', ratingHilda:'', reviewBailey:'', reviewHilda:'', isRewatch:false
     }
   };
   render();
@@ -914,7 +1343,7 @@ function renderModal(){
         ${!state.settings.tmdbKey ? `<div class="hint" style="margin-top:8px;">Add a TMDB API key in Settings to enable search &amp; posters.</div>`:''}
       </div>` : `
       <div class="selectedmovie">
-        ${m.selected.poster?`<img src="${m.selected.poster}"/>`:''}
+        ${m.selected.poster?`<img src="${posterUrl(m.selected.poster)}" loading="lazy"/>`:''}
         <div style="flex:1;"><h3 style="margin:0;font-family:var(--display);font-style:italic;">${escapeHtml(m.selected.title)}</h3><div class="hint">${m.selected.mediaType==='tv'?'TV show':'Movie'} · ${m.selected.year||''}${m.selected.genres&&m.selected.genres.length?' · '+m.selected.genres.join(', '):''}</div></div>
         <button class="iconbtn" id="change-title" style="border:2px solid var(--ink);flex:none;">Change</button>
       </div>
@@ -993,8 +1422,11 @@ function renderModal(){
 
       <div class="row2">
         <div class="field"><label>Your rating (0–10)</label><input type="number" id="f-rating-b" min="0" max="10" step="0.5" value="${f.ratingBailey}"/></div>
-        <div class="field"><label>Hilda's rating (0–10)</label><input type="number" id="f-rating-h" min="0" max="10" step="0.5" value="${f.ratingHilda}"/></div>
+        <div class="field"><label>${escapeHtml(state.settings.partnerLabel)}'s rating (0–10)</label><input type="number" id="f-rating-h" min="0" max="10" step="0.5" value="${f.ratingHilda}"/></div>
       </div>
+
+      <div class="field"><label>Your review</label><textarea id="f-review-b" rows="3" placeholder="What did you think?">${escapeHtml(f.reviewBailey)}</textarea></div>
+      <div class="field"><label>${escapeHtml(state.settings.partnerLabel)}'s review</label><textarea id="f-review-h" rows="3" placeholder="What did they think?">${escapeHtml(f.reviewHilda)}</textarea></div>
 
       ${!m.editingId && dupe ? `
       <div class="toggle-line">
@@ -1036,7 +1468,7 @@ function bindModal(){
         if(res.error){ box.innerHTML = `<div class="hint">Search failed — check your API key or connection.</div>`; return; }
         box.innerHTML = res.results.slice(0,8).map(r=>`
           <div class="sr-item" data-pick='${r.id}'>
-            ${r.poster?`<img src="${r.poster}"/>`:'<div class="noimg" style="width:38px;height:57px;">🎬</div>'}
+            ${r.poster?`<img src="${posterUrl(r.poster,true)}" loading="lazy"/>`:'<div class="noimg" style="width:38px;height:57px;">🎬</div>'}
             <div><div class="t">${escapeHtml(r.title)}</div><div class="y">${r.year||'—'}</div></div>
           </div>`).join('');
         box.querySelectorAll('[data-pick]').forEach(el=>{
@@ -1079,10 +1511,16 @@ function bindModal(){
     if(q('f-lastepisode')) f.lastEpisode = q('f-lastepisode').value ? Number(q('f-lastepisode').value) : null;
     if(q('f-rating-b')) f.ratingBailey = q('f-rating-b').value ? Number(q('f-rating-b').value) : null;
     if(q('f-rating-h')) f.ratingHilda = q('f-rating-h').value ? Number(q('f-rating-h').value) : null;
+    if(q('f-review-b')) f.reviewBailey = q('f-review-b').value;
+    if(q('f-review-h')) f.reviewHilda = q('f-review-h').value;
 
     const dupe = state.movies.find(mv=>mv.tmdbId===state.modal.selected.id && mv.mediaType===state.modal.selected.mediaType && mv.id!==state.modal.editingId);
     const isRewatch = q('tog-rewatch-locked') ? true : f.isRewatch;
     const completed = f.preLogged ? true : (f.multiSession ? f.completed : true);
+
+    if(state.modal.selected.runtimeMinutes===undefined){
+      state.modal.selected.runtimeMinutes = await tmdbRuntime(state.modal.selected.id, state.modal.selected.mediaType);
+    }
 
     const entry = {
       id: state.modal.editingId || uid(),
@@ -1092,6 +1530,7 @@ function bindModal(){
       year: state.modal.selected.year,
       poster: state.modal.selected.poster,
       genres: state.modal.selected.genres,
+      runtimeMinutes: state.modal.selected.runtimeMinutes || 0,
       preLogged: f.preLogged,
       startDate: f.preLogged ? null : f.startDate,
       startTime: f.preLogged ? null : f.startTime,
@@ -1106,6 +1545,7 @@ function bindModal(){
       lastSeason: completed ? null : f.lastSeason,
       lastEpisode: completed ? null : f.lastEpisode,
       ratingBailey: f.ratingBailey, ratingHilda: f.ratingHilda,
+      reviewBailey: f.reviewBailey, reviewHilda: f.reviewHilda,
       isRewatch: !!(isRewatch || (dupe && !state.modal.editingId)),
       needsReview: false
     };
@@ -1116,7 +1556,7 @@ function bindModal(){
     } else {
       state.movies.push(entry);
     }
-    await sSet('movies', state.movies);
+    await saveMovie(entry);
 
     if(state.modal.fromWatchlistId){
       const list = state.watchlists.find(l=>l.id===state.modal.fromWatchlistId);
@@ -1131,8 +1571,9 @@ function bindModal(){
 
   if(q('delete-entry')) q('delete-entry').onclick = async ()=>{
     if(!confirm('Delete this entry for good?')) return;
-    state.movies = state.movies.filter(mv=>mv.id!==state.modal.editingId);
-    await sSet('movies', state.movies);
+    const id = state.modal.editingId;
+    state.movies = state.movies.filter(mv=>mv.id!==id);
+    await deleteMovieRemote(id);
     state.modal = null; render();
   };
 }
