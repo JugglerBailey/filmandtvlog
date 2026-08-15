@@ -1155,7 +1155,7 @@ function renderPrelogged(c){
     </div>
     ${batchState.withHilda ? `<div class="field"><label>Who with</label><input type="text" id="batch-name" placeholder="${escapeHtml(state.settings.partnerLabel)}" value="${escapeHtml(batchState.togetherName)}"/></div>` : ''}`}
     <button class="btn block" id="batch-run" ${batchState.running?'disabled':''}>${batchState.running?'Importing…':'Import list'}</button>
-    ${batchState.log.length ? `<div class="settings-section" style="margin-top:16px;"><h3>Import results</h3>${batchState.log.map(l=>`<div class="listrow"><span>${l.ok?'✓':'✕'} ${escapeHtml(l.line)}${l.ok?` — ${escapeHtml(l.title)} (${l.mediaType==='tv'?'TV':'Movie'})`:' — no match found'}</span></div>`).join('')}</div>` : ''}
+    ${batchState.log.length ? `<div class="settings-section" style="margin-top:16px;"><h3>Import results</h3>${batchState.log.map(l=>`<div class="listrow"><span>${l.ok?'✓':'⚑'} ${escapeHtml(l.line)}${l.ok?` — ${escapeHtml(l.title)} (${l.mediaType==='tv'?'TV':'Movie'})`:' — no match found, sent to review queue'}</span></div>`).join('')}</div>` : ''}
   `;
   document.getElementById('back-settings').onclick = ()=>{ state.tab='settings'; render(); };
   c.querySelectorAll('[data-dest]').forEach(b=>b.onclick=()=>{ batchState.dest=b.dataset.dest; render(); });
@@ -1198,6 +1198,21 @@ async function runBatchImport(){
       }
       batchState.log.push({line, ok:true, title:pick.title, mediaType:pick.mediaType});
     } else {
+      // no match found — add a placeholder to the review queue instead of losing it
+      if(batchState.dest==='watchlist'){
+        const list = state.watchlists.find(l=>l.id===batchState.listId);
+        if(list) list.items.push({ id:uid(), tmdbId:null, mediaType:'movie', title:line, year:'', poster:'', genres:[], needsReview:true, searchedAs:line });
+      } else {
+        const placeholder = {
+          id:uid(), tmdbId:null, mediaType:'movie', title:line, year:'', poster:'', genres:[], runtimeMinutes:0, searchedAs:line,
+          preLogged:true, startDate:null, startTime:null, endDate:null, endTime:null,
+          watchedWith: batchState.withHilda?'together':'alone', watchedWithOther: batchState.withHilda?(batchState.togetherName||state.settings.partnerLabel):'',
+          isRewatch:false, favorite:false, completed:true, timeStopped:'', sceneNote:'', lastSeason:null, lastEpisode:null,
+          tags:'', ratingBailey:null, ratingHilda:null, location:'', locationOther:'', needsReview:true
+        };
+        state.movies.push(placeholder);
+        newMovies.push(placeholder);
+      }
       batchState.log.push({line, ok:false});
     }
     render();
@@ -1218,10 +1233,10 @@ function renderReviewQueue(c){
     <div class="hint" style="margin-bottom:14px;">Titles here are hidden from your Watched log and watchlists until confirmed or fixed.</div>
     ${movies.length===0 && wlItems.length===0 ? `<div class="empty"><b>All clear</b>Nothing waiting on review.</div>` : ''}
     ${movies.length ? `<div class="settings-section"><h3>Watched log (${movies.length})</h3>
-      ${movies.map(m=>`<div class="listrow"><span>${escapeHtml(m.title)} ${m.year?`(${m.year})`:''} · ${m.mediaType==='tv'?'TV':'Movie'}</span><span><button class="iconbtn" data-fixmovie="${m.id}">Fix</button><button class="iconbtn" data-delmovie="${m.id}">Delete</button></span></div>`).join('')}
+      ${movies.map(m=>`<div class="listrow"><span>${m.tmdbId?`${escapeHtml(m.title)} ${m.year?`(${m.year})`:''} · ${m.mediaType==='tv'?'TV':'Movie'}`:`<span style="color:var(--accent);">⚑ No match</span> — "${escapeHtml(m.title)}"`}</span><span><button class="iconbtn" data-fixmovie="${m.id}">Fix</button><button class="iconbtn" data-delmovie="${m.id}">Delete</button></span></div>`).join('')}
     </div>` : ''}
     ${wlItems.length ? `<div class="settings-section"><h3>Watchlists (${wlItems.length})</h3>
-      ${wlItems.map(i=>`<div class="listrow"><span>${escapeHtml(i.title)} ${i.year?`(${i.year})`:''} · ${i.mediaType==='tv'?'TV':'Movie'} · ${escapeHtml(i.listName)}</span><span><button class="iconbtn" data-fixwl="${i.id}" data-list="${i.listId}">Fix</button><button class="iconbtn" data-delwl="${i.id}" data-list="${i.listId}">Delete</button></span></div>`).join('')}
+      ${wlItems.map(i=>`<div class="listrow"><span>${i.tmdbId?`${escapeHtml(i.title)} ${i.year?`(${i.year})`:''} · ${i.mediaType==='tv'?'TV':'Movie'} · ${escapeHtml(i.listName)}`:`<span style="color:var(--accent);">⚑ No match</span> — "${escapeHtml(i.title)}" · ${escapeHtml(i.listName)}`}</span><span><button class="iconbtn" data-fixwl="${i.id}" data-list="${i.listId}">Fix</button><button class="iconbtn" data-delwl="${i.id}" data-list="${i.listId}">Delete</button></span></div>`).join('')}
     </div>` : ''}
   `;
   document.getElementById('back-settings').onclick = ()=>{ state.tab='settings'; render(); };
@@ -1265,7 +1280,7 @@ function renderFixModal(){
           <button class="seg-btn ${fm.type==='movie'?'active':''}" data-fmt="movie">Movie</button>
           <button class="seg-btn ${fm.type==='tv'?'active':''}" data-fmt="tv">TV Show</button>
         </div>
-        <input type="text" id="fix-search" placeholder="Search title…"/>
+        <input type="text" id="fix-search" placeholder="Search title…" value="${escapeHtml(fm.current.searchedAs||'')}"/>
         <div class="searchresults" id="fix-results"></div>
       </div>
       <button class="btn danger block" id="fix-delete" style="margin-top:10px;">Delete this item</button>
@@ -1314,13 +1329,14 @@ function bindFixModal(){
           const list = state.watchlists.find(l=>l.id===fm.listId);
           const item = list.items.find(i=>i.id===fm.itemId);
           item.tmdbId=r.id; item.mediaType=fm.type; item.title=r.title; item.year=r.year; item.poster=r.poster; item.genres=genreNames(r.genreIds, fm.type);
-          item.needsReview=false;
+          item.needsReview=false; item.searchedAs=q;
           await sSet('watchlists', state.watchlists);
           close();
         };
       });
     }, 400);
   };
+  if(input.value.trim().length>=2) input.oninput();
 }
 
 /* ---------------- ADD/EDIT MOVIE MODAL ---------------- */
@@ -1329,8 +1345,8 @@ function openAddModal(existing, fromWatchlistItem, fromWatchlistId){
   addModalType = existing ? (existing.mediaType||'movie') : fromWatchlistItem ? (fromWatchlistItem.mediaType||'movie') : 'movie';
   state.modal = {
     editingId: existing? existing.id : null,
-    selected: existing ? { id:existing.tmdbId, mediaType:existing.mediaType||'movie', title:existing.title, year:existing.year, poster:existing.poster, genres:existing.genres, runtimeMinutes:existing.runtimeMinutes } :
-               fromWatchlistItem ? { id:fromWatchlistItem.tmdbId, mediaType:fromWatchlistItem.mediaType||'movie', title:fromWatchlistItem.title, year:fromWatchlistItem.year, poster:fromWatchlistItem.poster, genres:fromWatchlistItem.genres } : null,
+    selected: (existing && existing.tmdbId) ? { id:existing.tmdbId, mediaType:existing.mediaType||'movie', title:existing.title, year:existing.year, poster:existing.poster, genres:existing.genres, runtimeMinutes:existing.runtimeMinutes } :
+               (fromWatchlistItem && fromWatchlistItem.tmdbId) ? { id:fromWatchlistItem.tmdbId, mediaType:fromWatchlistItem.mediaType||'movie', title:fromWatchlistItem.title, year:fromWatchlistItem.year, poster:fromWatchlistItem.poster, genres:fromWatchlistItem.genres } : null,
     fromWatchlistId: fromWatchlistId || null,
     fromWatchlistItemId: fromWatchlistItem ? fromWatchlistItem.id : null,
     searchedAs: existing ? existing.searchedAs : (fromWatchlistItem ? fromWatchlistItem.searchedAs : ''),
@@ -1380,7 +1396,7 @@ function renderModal(){
       </div>
       <div class="field">
         <label>Search title</label>
-        <input type="text" id="search-input" placeholder="${isTv?'Start typing a show title…':'Start typing a movie title…'}" autofocus/>
+        <input type="text" id="search-input" placeholder="${isTv?'Start typing a show title…':'Start typing a movie title…'}" value="${escapeHtml(m.searchedAs||'')}" autofocus/>
         <div class="searchresults" id="search-results"></div>
         ${!state.settings.tmdbKey ? `<div class="hint" style="margin-top:8px;">Add a TMDB API key in Settings to enable search &amp; posters.</div>`:''}
       </div>` : `
@@ -1524,6 +1540,7 @@ function bindModal(){
         });
       }, 400);
     };
+    if(input.value.trim().length>=2) input.oninput();
     return;
   }
 
