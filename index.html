@@ -98,6 +98,9 @@ select{flex:1;min-width:100px;}
 
 /* Editorial grid card */
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:22px 14px;}
+.section-divider{display:flex;align-items:center;gap:10px;margin:22px 0 14px;}
+.section-divider::before,.section-divider::after{content:'';flex:1;height:2px;background:var(--ink);}
+.section-divider span{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--ink-soft);white-space:nowrap;}
 .grid.cols-3{grid-template-columns:repeat(3,1fr);gap:16px 8px;}
 .grid.cols-4{grid-template-columns:repeat(4,1fr);gap:12px 6px;}
 .grid.cols-3 .gridcard h3{font-size:12px;}
@@ -406,7 +409,9 @@ let state = {
   watchedFilter: null,   // null | 'together' | 'alone'
   typeFilter: 'all',     // all | movie | tv
   sortBy: 'newest',      // newest | oldest | toprated | lowrated | az | za
-  gridCols: Number(localStorage.getItem('reellog:gridCols')) || 2,
+  currentUser: (localStorage.getItem('reellog:currentUser') || 'bailey'), // bailey | companion — who's using this device right now
+  gridColsWatched: Number(localStorage.getItem('reellog:gridColsWatched')) || 2,
+  gridColsWatchlist: Number(localStorage.getItem('reellog:gridColsWatchlist')) || 2,
   wlView: 'grid',        // grid | swipe
   filterPopupOpen: false,
   selectMode: false,
@@ -543,7 +548,7 @@ function render(){
   app.innerHTML = `
     <div class="topbar">
       <h1>${state.tab==='watched'?'Our Watch History':state.tab==='watchlist'?'Want to Watch':'Settings'}</h1>
-      <div class="sub">${state.tab==='watched' ? `${state.movies.length} film${state.movies.length===1?'':'s'} logged${totalWatchTimeLabel()?` · <span id="time-toggle" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px;">${totalWatchTimeLabel()}</span>`:''}` : state.tab==='watchlist' ? 'saved for later' : 'bailey & hilda'}</div>
+      <div class="sub">${state.tab==='watched' ? `${state.movies.length} film${state.movies.length===1?'':'s'} logged${totalWatchTimeLabel()?` · <span id="time-toggle" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px;">${totalWatchTimeLabel()}</span>`:''}` : state.tab==='watchlist' ? 'saved for later' : `${myLabel()} & ${otherLabel()}`}</div>
       ${topbarActionsHtml()}
     </div>
     <div class="content" id="content"></div>
@@ -566,8 +571,8 @@ function render(){
 }
 
 function topbarActionsHtml(){
-  if(state.tab==='watched') return `<div class="topbar-actions">${gridStepperHtml()}</div>`;
-  if(state.tab==='watchlist') return `<div class="topbar-actions">${state.wlView==='grid'?gridStepperHtml():''}<button class="settingsicon" id="goto-settings-icon">${ICON.settings}</button></div>`;
+  if(state.tab==='watched') return `<div class="topbar-actions">${gridStepperHtml('watched')}</div>`;
+  if(state.tab==='watchlist') return `<div class="topbar-actions">${state.wlView==='grid'?gridStepperHtml('watchlist'):''}<button class="settingsicon" id="goto-settings-icon">${ICON.settings}</button></div>`;
   return '';
 }
 
@@ -581,18 +586,20 @@ function bindTopbar(){
   }
   document.querySelectorAll('[data-stepcols]').forEach(b=>b.onclick=()=>{
     const dir = Number(b.dataset.stepcols);
-    state.gridCols = Math.max(2, Math.min(4, state.gridCols + dir));
-    localStorage.setItem('reellog:gridCols', state.gridCols);
+    const key = b.dataset.target==='watchlist' ? 'gridColsWatchlist' : 'gridColsWatched';
+    state[key] = Math.max(2, Math.min(4, state[key] + dir));
+    localStorage.setItem('reellog:'+key, state[key]);
     render();
   });
   if(document.getElementById('goto-settings-icon')) document.getElementById('goto-settings-icon').onclick = ()=>{ state.tab='settings'; render(); };
 }
 
-function gridStepperHtml(){
+function gridStepperHtml(target){
+  const val = target==='watchlist' ? state.gridColsWatchlist : state.gridColsWatched;
   return `<div class="gridstepper">
-    <button data-stepcols="-1" ${state.gridCols<=2?'disabled':''}>−</button>
-    <span class="count">${state.gridCols}</span>
-    <button data-stepcols="1" ${state.gridCols>=4?'disabled':''}>+</button>
+    <button data-stepcols="-1" data-target="${target}" ${val<=2?'disabled':''}>−</button>
+    <span class="count">${val}</span>
+    <button data-stepcols="1" data-target="${target}" ${val>=4?'disabled':''}>+</button>
   </div>`;
 }
 
@@ -615,6 +622,16 @@ function renderContent(){
 }
 
 function isTogether(m){ return m.watchedWith==='together' || m.watchedWith==='hilda' || m.watchedWith==='other'; }
+
+// Identity switch: whoever this device says is using the app gets "myself";
+// the other person is named specifically. Local to this device — not synced.
+function isCurrentUserBailey(){ return state.currentUser!=='companion'; }
+function myLabel(){ return isCurrentUserBailey() ? 'Bailey' : state.settings.partnerLabel; }
+function otherLabel(){ return isCurrentUserBailey() ? state.settings.partnerLabel : 'Bailey'; }
+function myRatingKey(){ return isCurrentUserBailey() ? 'ratingBailey' : 'ratingHilda'; }
+function myReviewKey(){ return isCurrentUserBailey() ? 'reviewBailey' : 'reviewHilda'; }
+function otherRatingKey(){ return isCurrentUserBailey() ? 'ratingHilda' : 'ratingBailey'; }
+function otherReviewKey(){ return isCurrentUserBailey() ? 'reviewHilda' : 'reviewBailey'; }
 
 function normalizeTags(tags){
   if(Array.isArray(tags)) return tags.filter(Boolean);
@@ -769,6 +786,8 @@ function bindFilterPopup(){
 
 function renderWatched(c){
   const list = filteredMovies();
+  const dated = list.filter(m=>!m.preLogged);
+  const prelogged = list.filter(m=>m.preLogged);
   const hasExtra = !!(state.wf.genre || state.wf.status || state.wf.fav || state.wf.minRating || state.wf.location || state.wf.tag);
   const reviewCount = state.movies.filter(m=>m.needsReview).length;
   c.innerHTML = `
@@ -798,8 +817,10 @@ function renderWatched(c){
       ${state.selectMode ? `<button class="pill" id="select-all">${list.length>0 && list.every(m=>state.selectedIds.has(m.id))?'Deselect all':'Select all'}</button>` : ''}
       <button class="pill ${state.selectMode?'active':''}" id="toggle-select">${state.selectMode?'Cancel select':'Select'}</button>
     </div>
-    ${list.length===0 ? `<div class="empty"><b>Nothing here yet</b>Tap + Log to add the first title.</div>` :
-      `<div class="grid cols-${state.gridCols}">${list.map(m=>movieCard(m)).join('')}</div>`}
+    ${list.length===0 ? `<div class="empty"><b>Nothing here yet</b>Tap + Log to add the first title.</div>` : `
+      ${dated.length ? `<div class="grid cols-${state.gridColsWatched}">${dated.map(m=>movieCard(m)).join('')}</div>` : ''}
+      ${prelogged.length ? `<div class="section-divider"><span>Pre-logged</span></div><div class="grid cols-${state.gridColsWatched}">${prelogged.map(m=>movieCard(m)).join('')}</div>` : ''}
+    `}
     ${state.selectMode && state.selectedIds.size>0 ? `
     <div class="selectbar"><div class="selectbar-inner">
       <span>${state.selectedIds.size} selected</span>
@@ -883,7 +904,7 @@ function movieCard(m){
     <div class="cap">
       <h3>${escapeHtml(m.title)} ${m.year?`<em>'${String(m.year).slice(2)}</em>`:''}</h3>
       <div class="meta">${[typeTag,dateStr,withTag].filter(Boolean).join(' · ')}${marks.length?' · '+marks.join(' · '):''}</div>
-      ${(m.ratingBailey||m.ratingHilda) ? `<div class="ratings">${m.ratingBailey?`You <b>${m.ratingBailey}</b>/5`:''}${m.ratingHilda?`${m.ratingBailey?' · ':''}${escapeHtml(state.settings.partnerLabel)} <b>${m.ratingHilda}</b>/5`:''}</div>` : ''}
+      ${(m.ratingBailey||m.ratingHilda) ? `<div class="ratings">${m[myRatingKey()]?`You <b>${m[myRatingKey()]}</b>/5`:''}${m[otherRatingKey()]?`${m[myRatingKey()]?' · ':''}${escapeHtml(otherLabel())} <b>${m[otherRatingKey()]}</b>/5`:''}</div>` : ''}
     </div>
   </div>`;
 }
@@ -935,7 +956,7 @@ function renderWatchlist(c){
           </div>
         </div>
       </div>`).join('')}</div>` :
-      `<div class="grid cols-${state.gridCols}">${visibleItems.map(it=>{
+      `<div class="grid cols-${state.gridColsWatchlist}">${visibleItems.map(it=>{
         const sel = state.selectedIds.has(it.id);
         return `
       <div class="gridcard ${state.selectMode?'selectable':''} ${sel?'selected':''}" data-item="${it.id}">
@@ -1068,15 +1089,6 @@ function renderSettings(c){
       </div>
     </div>
     <div class="settings-section">
-      <h3>Add to your iPhone Home Screen</h3>
-      <div class="hint">
-        1. Publish this artifact so it has its own link, and open that link in Safari (not the Claude app).<br/>
-        2. Tap the Share icon in Safari's toolbar.<br/>
-        3. Choose <b>Add to Home Screen</b>.<br/>
-        It'll launch full-screen like a regular app, and your data stays saved between visits.
-      </div>
-    </div>
-    <div class="settings-section">
       <h3>Refresh</h3>
       <div class="hint" style="margin-bottom:10px;">If something looks out of date or stuck, reload the app fresh.</div>
       <button class="btn secondary block" id="refresh-app">Refresh app</button>
@@ -1180,6 +1192,14 @@ function renderAdvancedSettings(c){
   c.innerHTML = `
     <button class="btn secondary" id="back-settings" style="margin-bottom:14px;">← Back to Settings</button>
     <div class="settings-section">
+      <h3>Who's using the app?</h3>
+      <div class="hint" style="margin-bottom:10px;">Sets which name "Your rating" and "Your review" refer to on this device. Only affects this device — doesn't sync.</div>
+      <div class="seg">
+        <button class="seg-btn ${isCurrentUserBailey()?'active':''}" data-user="bailey">Bailey</button>
+        <button class="seg-btn ${!isCurrentUserBailey()?'active':''}" data-user="companion">${escapeHtml(state.settings.partnerLabel)}</button>
+      </div>
+    </div>
+    <div class="settings-section">
       <h3>Low data mode</h3>
       <div class="hint" style="margin-bottom:10px;">Loads smaller poster images to use less data — handy on mobile or a limited plan. A small quality trade-off, worth testing to see if it's noticeable.</div>
       <div class="toggle-line" style="margin-bottom:0;">
@@ -1210,6 +1230,11 @@ function renderAdvancedSettings(c){
     </div>
   `;
   document.getElementById('back-settings').onclick = ()=>{ state.tab='settings'; render(); };
+  c.querySelectorAll('[data-user]').forEach(b=>b.onclick=()=>{
+    state.currentUser = b.dataset.user;
+    localStorage.setItem('reellog:currentUser', state.currentUser);
+    render();
+  });
   document.getElementById('save-key').onclick = async ()=>{
     state.settings.tmdbKey = document.getElementById('tmdb-key').value.trim();
     await sSet('settings', state.settings);
@@ -1600,27 +1625,26 @@ function renderModal(){
       <div class="field">
         <label>Your rating</label>
         <div class="ratingsplit">
-          <div class="starrating" data-person="bailey">
-            <div class="starrow">${starsHtml(f.ratingBailey)}</div>
-            <span class="starnum">${f.ratingBailey||0}/5</span>
+          <div class="starrating" data-person="me">
+            <div class="starrow">${starsHtml(f[myRatingKey()])}</div>
+            <span class="starnum">${f[myRatingKey()]||0}/5</span>
           </div>
-          <textarea id="f-review-b" rows="4" placeholder="Your review">${escapeHtml(f.reviewBailey)}</textarea>
+          <textarea id="f-review-me" rows="4" placeholder="Your review">${escapeHtml(f[myReviewKey()])}</textarea>
         </div>
       </div>
 
       <div class="field">
-        <label>${escapeHtml(state.settings.partnerLabel)}'s rating</label>
+        <label>${escapeHtml(otherLabel())}'s rating</label>
         <div class="ratingsplit">
-          <div class="starrating" data-person="hilda">
-            <div class="starrow">${starsHtml(f.ratingHilda)}</div>
-            <span class="starnum">${f.ratingHilda||0}/5</span>
+          <div class="starrating" data-person="other">
+            <div class="starrow">${starsHtml(f[otherRatingKey()])}</div>
+            <span class="starnum">${f[otherRatingKey()]||0}/5</span>
           </div>
-          <textarea id="f-review-h" rows="4" placeholder="${escapeHtml(state.settings.partnerLabel)}'s review">${escapeHtml(f.reviewHilda)}</textarea>
+          <textarea id="f-review-other" rows="4" placeholder="${escapeHtml(otherLabel())}'s review">${escapeHtml(f[otherReviewKey()])}</textarea>
         </div>
       </div>
 
-      <div class="field">
-        <label>Notes</label>
+      <div class="field">        <label>Notes</label>
         <textarea id="f-notes" rows="3" placeholder="Anything else worth remembering">${escapeHtml(f.notes)}</textarea>
       </div>
 
@@ -1697,8 +1721,8 @@ function bindModal(){
   liveBind('f-scenenote','sceneNote');
   liveBind('f-lastseason','lastSeason', v=>v?Number(v):null);
   liveBind('f-lastepisode','lastEpisode', v=>v?Number(v):null);
-  liveBind('f-review-b','reviewBailey');
-  liveBind('f-review-h','reviewHilda');
+  liveBind('f-review-me', myReviewKey());
+  liveBind('f-review-other', otherReviewKey());
   liveBind('f-notes','notes');
   if(q('tog-prelogged')) q('tog-prelogged').onclick=()=>{ f.preLogged=!f.preLogged; render(); };
   if(q('tog-notcomplete')) q('tog-notcomplete').onclick=()=>{ f.completed=!f.completed; render(); };
@@ -1742,14 +1766,14 @@ function bindModal(){
   // star ratings
   document.querySelectorAll('.starrating').forEach(container=>{
     const person = container.dataset.person;
+    const key = person==='me' ? myRatingKey() : otherRatingKey();
     container.querySelectorAll('.star').forEach(starEl=>{
       starEl.onclick = (e)=>{
         const rect = starEl.getBoundingClientRect();
         const isLeftHalf = (e.clientX - rect.left) < rect.width/2;
         const i = Number(starEl.dataset.star);
         const value = isLeftHalf ? i-0.5 : i;
-        if(person==='bailey') f.ratingBailey = (f.ratingBailey===value ? 0 : value);
-        else f.ratingHilda = (f.ratingHilda===value ? 0 : value);
+        f[key] = (f[key]===value ? 0 : value);
         render();
       };
     });
@@ -1767,8 +1791,8 @@ function bindModal(){
     if(q('f-scenenote')) f.sceneNote = q('f-scenenote').value;
     if(q('f-lastseason')) f.lastSeason = q('f-lastseason').value ? Number(q('f-lastseason').value) : null;
     if(q('f-lastepisode')) f.lastEpisode = q('f-lastepisode').value ? Number(q('f-lastepisode').value) : null;
-    if(q('f-review-b')) f.reviewBailey = q('f-review-b').value;
-    if(q('f-review-h')) f.reviewHilda = q('f-review-h').value;
+    if(q('f-review-me')) f[myReviewKey()] = q('f-review-me').value;
+    if(q('f-review-other')) f[otherReviewKey()] = q('f-review-other').value;
 
     const dupe = state.movies.find(mv=>mv.tmdbId===state.modal.selected.id && mv.mediaType===state.modal.selected.mediaType && mv.id!==state.modal.editingId);
     const isRewatch = q('tog-rewatch-locked') ? true : f.isRewatch;
