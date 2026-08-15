@@ -73,7 +73,7 @@ body{padding-bottom:env(safe-area-inset-bottom);}
 ::-webkit-scrollbar{display:none;}
 
 /* Masthead */
-.topbar{position:sticky;top:0;z-index:10;background:var(--bg);padding:calc(env(safe-area-inset-top) + 20px) 18px 12px;border-bottom:3px solid var(--ink);}
+.topbar{position:sticky;top:0;z-index:10;background:var(--bg);padding:calc(env(safe-area-inset-top) + 20px) 70px 12px 18px;border-bottom:3px solid var(--ink);}
 .topbar h1{font-family:var(--display);font-style:italic;font-weight:700;font-size:32px;margin:0;letter-spacing:-.3px;}
 .topbar .sub{font-family:var(--mono);font-size:10px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:2px;margin-top:4px;}
 
@@ -103,9 +103,12 @@ select{flex:1;min-width:100px;}
 .grid.cols-3 .gridcard .meta,.grid.cols-4 .gridcard .meta{font-size:9px;}
 .grid.cols-4 .gridcard .ratings{display:none;}
 .grid.cols-3 .gridcard .poster,.grid.cols-4 .gridcard .poster{box-shadow:3px 3px 0 var(--ink);}
-.densitytoggle{display:flex;gap:6px;margin-bottom:12px;justify-content:flex-end;}
-.densitytoggle button{width:32px;height:32px;border:2px solid var(--ink);background:var(--surface);color:var(--ink);cursor:pointer;font-family:var(--mono);font-size:12px;padding:0;}
-.densitytoggle button.active{background:var(--ink);color:var(--accent-ink);}
+.gridstepper{position:absolute;top:calc(env(safe-area-inset-top) + 18px);right:16px;display:flex;align-items:center;border:2px solid var(--ink);background:var(--surface);box-shadow:3px 3px 0 var(--line-soft);}
+.gridstepper button{width:28px;height:28px;border:none;background:none;color:var(--ink);cursor:pointer;font-family:var(--mono);font-size:15px;padding:0;display:flex;align-items:center;justify-content:center;}
+.gridstepper button:disabled{opacity:.3;cursor:default;}
+.gridstepper button:first-child{border-right:2px solid var(--ink);}
+.gridstepper button:last-child{border-left:2px solid var(--ink);}
+.gridstepper .count{width:22px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--ink);}
 
 /* Swipe carousel */
 .swipe-wrap{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:16px;padding:6px 30px 22px;margin:0 -14px;}
@@ -511,7 +514,8 @@ function render(){
   app.innerHTML = `
     <div class="topbar">
       <h1>${state.tab==='watched'?'Our Watch History':state.tab==='watchlist'?'Want to Watch':'Settings'}</h1>
-      <div class="sub">${state.tab==='watched' ? `${state.movies.length} film${state.movies.length===1?'':'s'} logged${totalWatchTimeLabel()?' · '+totalWatchTimeLabel():''}` : state.tab==='watchlist' ? 'saved for later' : 'bailey & hilda'}</div>
+      <div class="sub">${state.tab==='watched' ? `${state.movies.length} film${state.movies.length===1?'':'s'} logged${totalWatchTimeLabel()?` · <span id="time-toggle" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px;">${totalWatchTimeLabel()}</span>`:''}` : state.tab==='watchlist' ? 'saved for later' : 'bailey & hilda'}</div>
+      ${(state.tab==='watched' || (state.tab==='watchlist' && state.wlView==='grid')) ? gridStepperHtml() : ''}
     </div>
     <div class="content" id="content"></div>
     ${state.tab==='watched' ? `<button class="fab" id="fab-add">+ Log</button>` : ''}
@@ -526,10 +530,35 @@ function render(){
   `;
   renderContent();
   bindNav();
+  bindTopbar();
   if(state.tab==='watched'){ document.getElementById('fab-add').onclick = ()=>openAddModal(); }
   if(state.modal) bindModal();
   if(state.filterPopupOpen) bindFilterPopup();
   if(state.fixModal) bindFixModal();
+}
+
+function bindTopbar(){
+  if(document.getElementById('time-toggle')){
+    document.getElementById('time-toggle').onclick = (e)=>{
+      e.stopPropagation();
+      timeUnit = timeUnit==='hm' ? 'days' : timeUnit==='days' ? 'weeks' : 'hm';
+      render();
+    };
+  }
+  document.querySelectorAll('[data-stepcols]').forEach(b=>b.onclick=()=>{
+    const dir = Number(b.dataset.stepcols);
+    state.gridCols = Math.max(2, Math.min(4, state.gridCols + dir));
+    localStorage.setItem('reellog:gridCols', state.gridCols);
+    render();
+  });
+}
+
+function gridStepperHtml(){
+  return `<div class="gridstepper">
+    <button data-stepcols="-1" ${state.gridCols<=2?'disabled':''}>−</button>
+    <span class="count">${state.gridCols}</span>
+    <button data-stepcols="1" ${state.gridCols>=4?'disabled':''}>+</button>
+  </div>`;
 }
 
 function bindNav(){
@@ -565,9 +594,12 @@ function applyThemeChrome(theme){
   if(statusMeta) statusMeta.setAttribute('content', dark ? 'black-translucent' : 'default');
 }
 
+let timeUnit = 'hm'; // hm | days | weeks
 function totalWatchTimeLabel(){
   const totalMin = state.movies.filter(m=>m.completed).reduce((sum,m)=>sum+(m.runtimeMinutes||0),0);
   if(totalMin<=0) return '';
+  if(timeUnit==='days') return `${(totalMin/1440).toFixed(1)}days watched`;
+  if(timeUnit==='weeks') return `${(totalMin/10080).toFixed(1)}weeks watched`;
   const h = Math.floor(totalMin/60), m = totalMin%60;
   return `${h}h ${m}m watched`;
 }
@@ -686,7 +718,6 @@ function renderWatched(c){
       ${state.selectMode ? `<button class="pill" id="select-all">${list.length>0 && list.every(m=>state.selectedIds.has(m.id))?'Deselect all':'Select all'}</button>` : ''}
       <button class="pill ${state.selectMode?'active':''}" id="toggle-select">${state.selectMode?'Cancel select':'Select'}</button>
     </div>
-    ${densityToggleHtml()}
     ${list.length===0 ? `<div class="empty"><b>Nothing here yet</b>Tap + Log to add the first title.</div>` :
       `<div class="grid cols-${state.gridCols}">${list.map(m=>movieCard(m)).join('')}</div>`}
     ${state.selectMode && state.selectedIds.size>0 ? `
@@ -696,7 +727,6 @@ function renderWatched(c){
       <button class="btn danger" id="bulk-delete" style="padding:8px 12px;">Delete</button>
     </div></div>` : ''}
   `;
-  bindDensityToggle(c);
   c.querySelectorAll('[data-t]').forEach(p=>p.onclick=()=>{ state.typeFilter = p.dataset.t; render(); });
   c.querySelectorAll('[data-f]').forEach(p=>p.onclick=()=>{
     const f = p.dataset.f;
@@ -779,19 +809,6 @@ function movieCard(m){
 
 function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-function densityToggleHtml(){
-  return `<div class="densitytoggle">
-    ${[2,3,4].map(n=>`<button data-cols="${n}" class="${state.gridCols===n?'active':''}" title="${n} per row">${n}</button>`).join('')}
-  </div>`;
-}
-function bindDensityToggle(c){
-  c.querySelectorAll('[data-cols]').forEach(b=>b.onclick=()=>{
-    state.gridCols = Number(b.dataset.cols);
-    localStorage.setItem('reellog:gridCols', state.gridCols);
-    render();
-  });
-}
-
 /* ---------------- WATCHLIST TAB ---------------- */
 let wlQuickType = 'movie';
 function renderWatchlist(c){
@@ -822,7 +839,6 @@ function renderWatchlist(c){
         <button class="pill ${state.selectMode?'active':''}" id="toggle-select">${state.selectMode?'Cancel':'Select'}</button>
       </div>` : ''}
     </div>
-    ${state.wlView==='grid' ? densityToggleHtml() : ''}
     ${visibleItems.length===0 ? `<div class="empty"><b>List is empty</b>Search a title above to add it.</div>` :
       state.wlView==='swipe' ? `
       <div class="swipe-hint">← Swipe through ${visibleItems.length} title${visibleItems.length===1?'':'s'} →</div>
@@ -860,7 +876,6 @@ function renderWatchlist(c){
       <button class="btn danger" id="bulk-delete-wl" style="padding:8px 12px;">Delete</button>
     </div></div>` : ''}
   `;
-  bindDensityToggle(c);
   c.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{ state.wlView = b.dataset.view; render(); });
   if(document.getElementById('goto-review')) document.getElementById('goto-review').onclick = ()=>{ state.tab='reviewqueue'; render(); };
   if(document.getElementById('toggle-select')) document.getElementById('toggle-select').onclick = ()=>{
@@ -920,7 +935,7 @@ async function quickAddToWatchlist(listId){
   if(res.error || !res.results.length){ alert('No matches found — you can still search again or check the title.'); return; }
   const top = res.results[0];
   const list = state.watchlists.find(l=>l.id===listId);
-  list.items.push({ id:uid(), tmdbId:top.id, mediaType:wlQuickType, title:top.title, year:top.year, poster:top.poster, genres: genreNames(top.genreIds, wlQuickType) });
+  list.items.push({ id:uid(), tmdbId:top.id, mediaType:wlQuickType, title:top.title, year:top.year, poster:top.poster, genres: genreNames(top.genreIds, wlQuickType), searchedAs:q });
   await sSet('watchlists', state.watchlists);
   input.value='';
   render();
@@ -1167,12 +1182,12 @@ async function runBatchImport(){
     if(pick){
       if(batchState.dest==='watchlist'){
         const list = state.watchlists.find(l=>l.id===batchState.listId);
-        if(list) list.items.push({ id:uid(), tmdbId:pick.id, mediaType:pick.mediaType, title:pick.title, year:pick.year, poster:pick.poster, genres:genreNames(pick.genreIds,pick.mediaType), needsReview:false });
+        if(list) list.items.push({ id:uid(), tmdbId:pick.id, mediaType:pick.mediaType, title:pick.title, year:pick.year, poster:pick.poster, genres:genreNames(pick.genreIds,pick.mediaType), needsReview:false, searchedAs:line });
       } else {
         const dupe = state.movies.find(m=>m.tmdbId===pick.id && m.mediaType===pick.mediaType);
         const runtimeMinutes = await tmdbRuntime(pick.id, pick.mediaType);
         const newMovie = {
-          id:uid(), tmdbId:pick.id, mediaType:pick.mediaType, title:pick.title, year:pick.year, poster:pick.poster, genres:genreNames(pick.genreIds,pick.mediaType), runtimeMinutes,
+          id:uid(), tmdbId:pick.id, mediaType:pick.mediaType, title:pick.title, year:pick.year, poster:pick.poster, genres:genreNames(pick.genreIds,pick.mediaType), runtimeMinutes, searchedAs:line,
           preLogged:true, startDate:null, startTime:null, endDate:null, endTime:null,
           watchedWith: batchState.withHilda?'together':'alone', watchedWithOther: batchState.withHilda?(batchState.togetherName||state.settings.partnerLabel):'',
           isRewatch: !!dupe, favorite:false, completed:true, timeStopped:'', sceneNote:'', lastSeason:null, lastEpisode:null,
@@ -1318,6 +1333,7 @@ function openAddModal(existing, fromWatchlistItem, fromWatchlistId){
                fromWatchlistItem ? { id:fromWatchlistItem.tmdbId, mediaType:fromWatchlistItem.mediaType||'movie', title:fromWatchlistItem.title, year:fromWatchlistItem.year, poster:fromWatchlistItem.poster, genres:fromWatchlistItem.genres } : null,
     fromWatchlistId: fromWatchlistId || null,
     fromWatchlistItemId: fromWatchlistItem ? fromWatchlistItem.id : null,
+    searchedAs: existing ? existing.searchedAs : (fromWatchlistItem ? fromWatchlistItem.searchedAs : ''),
     form: existing ? {
       preLogged: existing.preLogged, multiSession: !!(existing.startDate && existing.endDate && existing.startDate!==existing.endDate) || (!existing.completed && !existing.preLogged),
       startDate: existing.startDate||new Date().toISOString().slice(0,10), startTime: existing.startTime||'',
@@ -1373,6 +1389,7 @@ function renderModal(){
         <div style="flex:1;"><h3 style="margin:0;font-family:var(--display);font-style:italic;">${escapeHtml(m.selected.title)}</h3><div class="hint">${m.selected.mediaType==='tv'?'TV show':'Movie'} · ${m.selected.year||''}${m.selected.genres&&m.selected.genres.length?' · '+m.selected.genres.join(', '):''}</div></div>
         <button class="iconbtn" id="change-title" style="border:2px solid var(--ink);flex:none;">Change</button>
       </div>
+      ${m.searchedAs ? `<div class="hint" style="margin-top:6px;">You searched: "${escapeHtml(m.searchedAs)}"</div>` : ''}
       <div class="hint" style="margin-top:6px;">Wrong match — found a TV version of a movie, or vice versa? Tap Change to switch type and search a different title.</div>
       ${!m.editingId && dupe ? `<div class="dupewarn"><b>Already logged.</b> You watched this ${dupe.preLogged?'before you started logging':'starting '+(dupe.startDate||'')}. Save again below to add it as a rewatch, or close this and edit the original entry instead.</div>`:''}
       `}
@@ -1501,6 +1518,7 @@ function bindModal(){
           el.onclick = ()=>{
             const r = res.results.find(x=>x.id==el.dataset.pick);
             state.modal.selected = { id:r.id, mediaType:addModalType, title:r.title, year:r.year, poster:r.poster, genres: genreNames(r.genreIds, addModalType) };
+            state.modal.searchedAs = q;
             render();
           };
         });
@@ -1557,6 +1575,7 @@ function bindModal(){
       poster: state.modal.selected.poster,
       genres: state.modal.selected.genres,
       runtimeMinutes: state.modal.selected.runtimeMinutes || 0,
+      searchedAs: state.modal.searchedAs || '',
       preLogged: f.preLogged,
       startDate: f.preLogged ? null : f.startDate,
       startTime: f.preLogged ? null : f.startTime,
