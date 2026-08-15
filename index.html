@@ -81,7 +81,13 @@ select{flex:1;min-width:100px;}
 .swipe-card h3{font-family:var(--display);font-weight:600;font-size:18px;margin:0 0 4px;}
 .swipe-card .meta{font-family:var(--mono);font-size:10px;color:var(--ink-soft);text-transform:uppercase;margin-bottom:10px;}
 .swipe-hint{text-align:center;font-family:var(--mono);font-size:10px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;}
-.gridcard{cursor:pointer;}
+.gridcard{cursor:pointer;position:relative;}
+.gridcard.selectable .poster{opacity:.85;}
+.gridcard.selected .poster{outline:3px solid var(--accent);outline-offset:2px;}
+.selectdot{position:absolute;top:8px;right:8px;width:24px;height:24px;background:var(--surface);border:2px solid var(--ink);color:var(--accent);font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;z-index:5;}
+.selectbar{position:fixed;left:0;right:0;bottom:78px;display:flex;justify-content:center;z-index:25;padding:0 14px;}
+.selectbar-inner{max-width:520px;width:100%;background:var(--ink);border:2px solid var(--ink);box-shadow:4px 4px 0 var(--line-soft);display:flex;gap:10px;padding:12px;align-items:center;}
+.selectbar-inner span{color:var(--accent-ink);font-family:var(--mono);font-size:12px;text-transform:uppercase;letter-spacing:.5px;flex:1;}
 .gridcard .poster{width:100%;aspect-ratio:2/3;background:var(--surface-2);border:2px solid var(--ink);overflow:hidden;position:relative;box-shadow:4px 4px 0 var(--ink);}
 .gridcard .poster img{width:100%;height:100%;object-fit:cover;display:block;}
 .gridcard .noimg{display:flex;align-items:center;justify-content:center;height:100%;color:var(--ink-soft);font-size:26px;}
@@ -211,6 +217,8 @@ let state = {
   gridCols: Number(localStorage.getItem('reellog:gridCols')) || 2,
   wlView: 'grid',        // grid | swipe
   filterPopupOpen: false,
+  selectMode: false,
+  selectedIds: new Set(),
   wf: { genre:'', status:'', fav:false, minRating:'', location:'' },
   wlActive: null,
   modal: null,            // {type:'add', prefill, editingId, fromWatchlist}
@@ -320,7 +328,7 @@ function render(){
 
 function bindNav(){
   document.querySelectorAll('.navbtn').forEach(b=>{
-    b.onclick = ()=>{ state.tab = b.dataset.tab; state.modal=null; state.filterPopupOpen=false; render(); };
+    b.onclick = ()=>{ state.tab = b.dataset.tab; state.modal=null; state.filterPopupOpen=false; state.selectMode=false; state.selectedIds=new Set(); render(); };
   });
 }
 
@@ -341,6 +349,7 @@ function filteredMovies(){
   if(state.typeFilter!=='all') list = list.filter(m=>(m.mediaType||'movie')===state.typeFilter);
   if(state.watchedFilter==='together') list = list.filter(m=>isTogether(m));
   if(state.watchedFilter==='alone') list = list.filter(m=>m.watchedWith==='alone');
+  if(state.watchedFilter==='review') list = list.filter(m=>m.needsReview);
   if(state.wf.genre) list = list.filter(m=>(m.genres||[]).includes(state.wf.genre));
   if(state.wf.status==='partial') list = list.filter(m=>!m.completed);
   if(state.wf.status==='complete') list = list.filter(m=>m.completed);
@@ -416,6 +425,7 @@ function bindFilterPopup(){
 function renderWatched(c){
   const list = filteredMovies();
   const hasExtra = !!(state.wf.genre || state.wf.status || state.wf.fav || state.wf.minRating || state.wf.location);
+  const reviewCount = state.movies.filter(m=>m.needsReview).length;
   c.innerHTML = `
     <div class="pillrow">
       <button class="pill ${state.typeFilter==='all'?'active':''}" data-t="all">All Types</button>
@@ -427,10 +437,19 @@ function renderWatched(c){
       <button class="pill ${state.watchedFilter==='together'?'active':''}" data-f="together">Together</button>
       <button class="pill ${state.watchedFilter==='alone'?'active':''}" data-f="alone">Watched Alone</button>
       <button class="pill ${hasExtra?'active':''}" id="open-filters">Filter${hasExtra?' •':''}</button>
+      ${reviewCount>0?`<button class="pill ${state.watchedFilter==='review'?'active':''}" data-f="review" style="border-color:var(--accent);color:var(--accent);">⚑ Needs review (${reviewCount})</button>`:''}
+    </div>
+    <div class="pillrow" style="justify-content:flex-end;">
+      <button class="pill ${state.selectMode?'active':''}" id="toggle-select">${state.selectMode?'Cancel select':'Select'}</button>
     </div>
     ${densityToggleHtml()}
     ${list.length===0 ? `<div class="empty"><b>Nothing here yet</b>Tap + Log to add the first title.</div>` :
       `<div class="grid cols-${state.gridCols}">${list.map(m=>movieCard(m)).join('')}</div>`}
+    ${state.selectMode && state.selectedIds.size>0 ? `
+    <div class="selectbar"><div class="selectbar-inner">
+      <span>${state.selectedIds.size} selected</span>
+      <button class="btn danger" id="bulk-delete" style="padding:8px 12px;">Delete</button>
+    </div></div>` : ''}
   `;
   bindDensityToggle(c);
   c.querySelectorAll('[data-t]').forEach(p=>p.onclick=()=>{ state.typeFilter = p.dataset.t; render(); });
@@ -441,7 +460,28 @@ function renderWatched(c){
     render();
   });
   document.getElementById('open-filters').onclick = ()=>{ state.filterPopupOpen = true; render(); };
-  c.querySelectorAll('[data-open]').forEach(card=>card.onclick=()=>openAddModal(state.movies.find(m=>m.id===card.dataset.open)));
+  document.getElementById('toggle-select').onclick = ()=>{
+    state.selectMode = !state.selectMode;
+    state.selectedIds = new Set();
+    render();
+  };
+  if(document.getElementById('bulk-delete')) document.getElementById('bulk-delete').onclick = async ()=>{
+    if(!confirm(`Delete ${state.selectedIds.size} entr${state.selectedIds.size===1?'y':'ies'} for good?`)) return;
+    state.movies = state.movies.filter(m=>!state.selectedIds.has(m.id));
+    await sSet('movies', state.movies);
+    state.selectedIds = new Set();
+    state.selectMode = false;
+    render();
+  };
+  c.querySelectorAll('[data-open]').forEach(card=>card.onclick=()=>{
+    const id = card.dataset.open;
+    if(state.selectMode){
+      if(state.selectedIds.has(id)) state.selectedIds.delete(id); else state.selectedIds.add(id);
+      render();
+    } else {
+      openAddModal(state.movies.find(m=>m.id===id));
+    }
+  });
 }
 
 function fmtDate(d){ return d ? new Date(d+'T00:00').toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'}) : ''; }
@@ -459,10 +499,12 @@ function movieCard(m){
     else if(m.timeStopped) progress = `<span class="tag mark">Stopped at ${escapeHtml(m.timeStopped)}</span>`;
     else progress = `<span class="tag mark">In progress</span>`;
   }
-  const marks = [progress, m.isRewatch?'<span class="tag mark">Rewatch</span>':'', m.favorite?'<span class="tag mark">★ Favorite</span>':''].filter(Boolean);
+  const marks = [m.needsReview?'<span class="tag mark">⚑ Review</span>':'', progress, m.isRewatch?'<span class="tag mark">Rewatch</span>':'', m.favorite?'<span class="tag mark">★ Favorite</span>':''].filter(Boolean);
   const typeTag = m.mediaType==='tv' ? '<span class="tag">TV</span>' : '';
+  const selected = state.selectedIds.has(m.id);
   return `
-  <div class="gridcard" data-open="${m.id}">
+  <div class="gridcard ${state.selectMode?'selectable':''} ${selected?'selected':''}" data-open="${m.id}">
+    ${state.selectMode?`<div class="selectdot">${selected?'✓':''}</div>`:''}
     <div class="poster">${m.poster ? `<img src="${m.poster}"/>` : `<div class="noimg">🎬</div>`}</div>
     <div class="cap">
       <h3>${escapeHtml(m.title)} ${m.year?`<em>'${String(m.year).slice(2)}</em>`:''}</h3>
@@ -491,6 +533,7 @@ function bindDensityToggle(c){
 let wlQuickType = 'movie';
 function renderWatchlist(c){
   const active = state.watchlists.find(l=>l.id===state.wlActive) || state.watchlists[0];
+  const reviewCount = active.items.filter(i=>i.needsReview).length;
   c.innerHTML = `
     <div class="seg" style="margin-bottom:8px;">
       <button class="seg-btn ${wlQuickType==='movie'?'active':''}" data-qt="movie">Movie</button>
@@ -508,9 +551,11 @@ function renderWatchlist(c){
       <div style="display:flex;gap:8px;">
         <button class="pill ${state.wlView==='grid'?'active':''}" data-view="grid">Grid</button>
         <button class="pill ${state.wlView==='swipe'?'active':''}" data-view="swipe">Swipe</button>
+        ${reviewCount>0?`<span class="pill" style="border-color:var(--accent);color:var(--accent);pointer-events:none;">⚑ ${reviewCount} to review</span>`:''}
       </div>
-      ${state.wlView==='grid' ? densityToggleHtml() : ''}
+      ${state.wlView==='grid' ? `<button class="pill ${state.selectMode?'active':''}" id="toggle-select">${state.selectMode?'Cancel':'Select'}</button>` : ''}
     </div>
+    ${state.wlView==='grid' ? densityToggleHtml() : ''}
     ${active.items.length===0 ? `<div class="empty"><b>List is empty</b>Search a title above to add it.</div>` :
       state.wlView==='swipe' ? `
       <div class="swipe-hint">← Swipe through ${active.items.length} title${active.items.length===1?'':'s'} →</div>
@@ -519,28 +564,52 @@ function renderWatchlist(c){
         <div class="poster">${it.poster?`<img src="${it.poster}"/>`:`<div class="noimg">🎬</div>`}</div>
         <div class="cap">
           <h3>${escapeHtml(it.title)} ${it.year?`<em style="color:var(--ink-soft);font-weight:400;">'${String(it.year).slice(2)}</em>`:''}</h3>
-          <div class="meta">${[it.mediaType==='tv'?'TV':'Movie', (it.genres||[]).slice(0,2).join(' · ')].filter(Boolean).join(' · ')}</div>
+          <div class="meta">${[it.mediaType==='tv'?'TV':'Movie', it.needsReview?'⚑ Review':'', (it.genres||[]).slice(0,2).join(' · ')].filter(Boolean).join(' · ')}</div>
           <div class="actions">
             <button class="btn block" data-watch="${it.id}" style="padding:10px;">Mark watched</button>
             <button class="btn secondary block" data-remove="${it.id}" style="padding:10px;">Remove</button>
           </div>
         </div>
       </div>`).join('')}</div>` :
-      `<div class="grid cols-${state.gridCols}">${active.items.map(it=>`
-      <div class="gridcard">
+      `<div class="grid cols-${state.gridCols}">${active.items.map(it=>{
+        const sel = state.selectedIds.has(it.id);
+        return `
+      <div class="gridcard ${state.selectMode?'selectable':''} ${sel?'selected':''}" data-item="${it.id}">
+        ${state.selectMode?`<div class="selectdot">${sel?'✓':''}</div>`:''}
         <div class="poster">${it.poster?`<img src="${it.poster}"/>`:`<div class="noimg">🎬</div>`}</div>
         <div class="cap">
           <h3>${escapeHtml(it.title)} ${it.year?`<em>'${String(it.year).slice(2)}</em>`:''}</h3>
-          <div class="meta">${[it.mediaType==='tv'?'TV':'', (it.genres||[]).slice(0,2).join(' · ')].filter(Boolean).join(' · ')}</div>
-          <div class="actions">
+          <div class="meta">${[it.mediaType==='tv'?'TV':'', it.needsReview?'<span class="tag mark">⚑</span>':'', (it.genres||[]).slice(0,2).join(' · ')].filter(Boolean).join(' · ')}</div>
+          ${!state.selectMode?`<div class="actions">
             <button class="btn" data-watch="${it.id}" style="padding:8px 10px;font-size:10px;">Mark watched</button>
             <button class="btn secondary" data-remove="${it.id}" style="padding:8px 10px;font-size:10px;">Remove</button>
-          </div>
+          </div>`:''}
         </div>
-      </div>`).join('')}</div>`}
+      </div>`;}).join('')}</div>`}
+    ${state.wlView==='grid' && state.selectMode && state.selectedIds.size>0 ? `
+    <div class="selectbar"><div class="selectbar-inner">
+      <span>${state.selectedIds.size} selected</span>
+      <button class="btn danger" id="bulk-delete-wl" style="padding:8px 12px;">Delete</button>
+    </div></div>` : ''}
   `;
   bindDensityToggle(c);
   c.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{ state.wlView = b.dataset.view; render(); });
+  if(document.getElementById('toggle-select')) document.getElementById('toggle-select').onclick = ()=>{
+    state.selectMode = !state.selectMode; state.selectedIds = new Set(); render();
+  };
+  c.querySelectorAll('[data-item]').forEach(card=>card.onclick=()=>{
+    if(!state.selectMode) return;
+    const id = card.dataset.item;
+    if(state.selectedIds.has(id)) state.selectedIds.delete(id); else state.selectedIds.add(id);
+    render();
+  });
+  if(document.getElementById('bulk-delete-wl')) document.getElementById('bulk-delete-wl').onclick = async ()=>{
+    if(!confirm(`Remove ${state.selectedIds.size} title${state.selectedIds.size===1?'':'s'} from this list?`)) return;
+    active.items = active.items.filter(i=>!state.selectedIds.has(i.id));
+    await sSet('watchlists', state.watchlists);
+    state.selectedIds = new Set(); state.selectMode = false;
+    render();
+  };
   document.getElementById('wl-quick-btn').onclick = ()=>quickAddToWatchlist(active.id);
   document.getElementById('wl-quick').onkeydown = (e)=>{ if(e.key==='Enter') quickAddToWatchlist(active.id); };
   c.querySelectorAll('[data-qt]').forEach(b=>b.onclick=()=>{ wlQuickType=b.dataset.qt; render(); });
@@ -762,7 +831,7 @@ async function runBatchImport(){
     if(pick){
       if(batchState.dest==='watchlist'){
         const list = state.watchlists.find(l=>l.id===batchState.listId);
-        if(list) list.items.push({ id:uid(), tmdbId:pick.id, mediaType:pick.mediaType, title:pick.title, year:pick.year, poster:pick.poster, genres:genreNames(pick.genreIds,pick.mediaType) });
+        if(list) list.items.push({ id:uid(), tmdbId:pick.id, mediaType:pick.mediaType, title:pick.title, year:pick.year, poster:pick.poster, genres:genreNames(pick.genreIds,pick.mediaType), needsReview:true });
       } else {
         const dupe = state.movies.find(m=>m.tmdbId===pick.id && m.mediaType===pick.mediaType);
         state.movies.push({
@@ -770,7 +839,7 @@ async function runBatchImport(){
           preLogged:true, startDate:null, startTime:null, endDate:null, endTime:null,
           watchedWith: batchState.withHilda?'together':'alone', watchedWithOther: batchState.withHilda?(batchState.togetherName||state.settings.partnerLabel):'',
           isRewatch: !!dupe, favorite:false, completed:true, timeStopped:'', sceneNote:'', lastSeason:null, lastEpisode:null,
-          tags:'', ratingBailey:null, ratingHilda:null, location:'', locationOther:''
+          tags:'', ratingBailey:null, ratingHilda:null, location:'', locationOther:'', needsReview:true
         });
       }
       batchState.log.push({line, ok:true, title:pick.title, mediaType:pick.mediaType});
@@ -1037,7 +1106,8 @@ function bindModal(){
       lastSeason: completed ? null : f.lastSeason,
       lastEpisode: completed ? null : f.lastEpisode,
       ratingBailey: f.ratingBailey, ratingHilda: f.ratingHilda,
-      isRewatch: !!(isRewatch || (dupe && !state.modal.editingId))
+      isRewatch: !!(isRewatch || (dupe && !state.modal.editingId)),
+      needsReview: false
     };
 
     if(state.modal.editingId){
