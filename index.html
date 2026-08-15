@@ -83,7 +83,9 @@ body{padding-bottom:env(safe-area-inset-bottom);}
 .empty b{color:var(--ink);display:block;font-family:var(--display);font-style:italic;font-size:19px;margin-bottom:6px;}
 
 /* Pills / filters */
-.pillrow{display:flex;gap:8px;padding:2px 0 14px;overflow-x:auto;}
+.pillrow{display:flex;gap:8px;padding:2px 0 14px;overflow-x:auto;align-items:center;}
+.sortwrap{margin-left:auto;padding-left:10px;border-left:2px solid var(--line-soft);flex:none;}
+.sortwrap select{border:2px solid var(--ink);background:var(--surface);color:var(--ink);font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.3px;padding:8px 10px;border-radius:0;}
 .pill{flex:none;font-family:var(--mono);font-size:11px;letter-spacing:.5px;text-transform:uppercase;padding:9px 14px;border-radius:0;border:2px solid var(--ink);background:transparent;color:var(--ink);cursor:pointer;white-space:nowrap;}
 .pill.active{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600;}
 .filterpanel{background:var(--surface);border:2px solid var(--ink);padding:14px;margin-bottom:16px;display:flex;flex-direction:column;gap:10px;box-shadow:5px 5px 0 var(--line-soft);}
@@ -395,6 +397,7 @@ let state = {
   locked: false,
   watchedFilter: null,   // null | 'together' | 'alone'
   typeFilter: 'all',     // all | movie | tv
+  sortBy: 'newest',      // newest | oldest | toprated | lowrated | az | za
   gridCols: Number(localStorage.getItem('reellog:gridCols')) || 2,
   wlView: 'grid',        // grid | swipe
   filterPopupOpen: false,
@@ -612,7 +615,7 @@ function starsHtml(value){
   value = value||0;
   let out = '';
   for(let i=1;i<=5;i++){
-    const full = i*2, half = i*2-1;
+    const full = i, half = i-0.5;
     let pct = 0;
     if(value>=full) pct=100; else if(value>=half) pct=50;
     out += `<span class="star" data-star="${i}"><span class="star-bg">★</span><span class="star-fg" style="width:${pct}%">★</span></span>`;
@@ -676,7 +679,13 @@ function filteredMovies(){
   });
   if(state.wf.location) list = list.filter(m=>m.location===state.wf.location);
   if(state.wf.tag) list = list.filter(m=>normalizeTags(m.tags).includes(state.wf.tag));
-  list.sort((a,b)=>(b.startDate||'0')<(a.startDate||'0')?-1:1);
+  const bestRating = m=>Math.max(m.ratingBailey||0, m.ratingHilda||0);
+  if(state.sortBy==='oldest') list.sort((a,b)=>(a.startDate||'9999')<(b.startDate||'9999')?-1:1);
+  else if(state.sortBy==='toprated') list.sort((a,b)=>bestRating(b)-bestRating(a));
+  else if(state.sortBy==='lowrated') list.sort((a,b)=>bestRating(a)-bestRating(b));
+  else if(state.sortBy==='az') list.sort((a,b)=>a.title.localeCompare(b.title));
+  else if(state.sortBy==='za') list.sort((a,b)=>b.title.localeCompare(a.title));
+  else list.sort((a,b)=>(b.startDate||'0')<(a.startDate||'0')?-1:1);
   return list;
 }
 
@@ -703,7 +712,7 @@ function renderFilterPopup(){
         <label>Min rating</label>
         <select id="f-rating">
           <option value="">Any rating</option>
-          ${[9,8,7,6,5,4,3].map(n=>`<option value="${n}" ${state.wf.minRating==n?'selected':''}>${n}+</option>`).join('')}
+          ${[4.5,4,3.5,3,2.5,2,1.5].map(n=>`<option value="${n}" ${state.wf.minRating==n?'selected':''}>${n}+</option>`).join('')}
         </select>
       </div>
       <div class="toggle-line">
@@ -752,6 +761,16 @@ function renderWatched(c){
       <button class="pill ${state.typeFilter==='all'?'active':''}" data-t="all">All Types</button>
       <button class="pill ${state.typeFilter==='movie'?'active':''}" data-t="movie">Movies</button>
       <button class="pill ${state.typeFilter==='tv'?'active':''}" data-t="tv">TV Shows</button>
+      <div class="sortwrap">
+        <select id="sort-select">
+          <option value="newest" ${state.sortBy==='newest'?'selected':''}>Newest first</option>
+          <option value="oldest" ${state.sortBy==='oldest'?'selected':''}>Oldest first</option>
+          <option value="toprated" ${state.sortBy==='toprated'?'selected':''}>Top rated</option>
+          <option value="lowrated" ${state.sortBy==='lowrated'?'selected':''}>Lowest rated</option>
+          <option value="az" ${state.sortBy==='az'?'selected':''}>Title A–Z</option>
+          <option value="za" ${state.sortBy==='za'?'selected':''}>Title Z–A</option>
+        </select>
+      </div>
     </div>
     <div class="pillrow">
       <button class="pill ${state.watchedFilter===null && !hasExtra?'active':''}" data-f="all">All</button>
@@ -774,6 +793,7 @@ function renderWatched(c){
     </div></div>` : ''}
   `;
   c.querySelectorAll('[data-t]').forEach(p=>p.onclick=()=>{ state.typeFilter = p.dataset.t; render(); });
+  document.getElementById('sort-select').onchange = (e)=>{ state.sortBy = e.target.value; render(); };
   c.querySelectorAll('[data-f]').forEach(p=>p.onclick=()=>{
     const f = p.dataset.f;
     if(f==='all'){ state.watchedFilter = null; state.wf = { genre:'', status:'', fav:false, minRating:'', location:'', tag:'' }; }
@@ -848,7 +868,7 @@ function movieCard(m){
     <div class="cap">
       <h3>${escapeHtml(m.title)} ${m.year?`<em>'${String(m.year).slice(2)}</em>`:''}</h3>
       <div class="meta">${[typeTag,dateStr,withTag].filter(Boolean).join(' · ')}${marks.length?' · '+marks.join(' · '):''}</div>
-      ${(m.ratingBailey||m.ratingHilda) ? `<div class="ratings">${m.ratingBailey?`You <b>${m.ratingBailey}</b>`:''}${m.ratingHilda?`${m.ratingBailey?' · ':''}Hilda <b>${m.ratingHilda}</b>`:''}</div>` : ''}
+      ${(m.ratingBailey||m.ratingHilda) ? `<div class="ratings">${m.ratingBailey?`You <b>${m.ratingBailey}</b>/5`:''}${m.ratingHilda?`${m.ratingBailey?' · ':''}${escapeHtml(state.settings.partnerLabel)} <b>${m.ratingHilda}</b>/5`:''}</div>` : ''}
     </div>
   </div>`;
 }
@@ -1313,7 +1333,7 @@ function renderReviewQueue(c){
     </div>` : ''}
   `;
   document.getElementById('back-settings').onclick = ()=>{ state.tab='settings'; render(); };
-  c.querySelectorAll('[data-fixmovie]').forEach(b=>b.onclick=()=>{ openAddModal(state.movies.find(m=>m.id===b.dataset.fixmovie)); });
+  c.querySelectorAll('[data-fixmovie]').forEach(b=>b.onclick=()=>{ openAddModal(state.movies.find(m=>m.id===b.dataset.fixmovie), null, null, 'reviewqueue'); });
   c.querySelectorAll('[data-delmovie]').forEach(b=>b.onclick=async ()=>{
     if(!confirm('Delete this entry for good?')) return;
     state.movies = state.movies.filter(m=>m.id!==b.dataset.delmovie);
@@ -1414,10 +1434,11 @@ function bindFixModal(){
 
 /* ---------------- ADD/EDIT MOVIE MODAL ---------------- */
 let addModalType = 'movie';
-function openAddModal(existing, fromWatchlistItem, fromWatchlistId){
+function openAddModal(existing, fromWatchlistItem, fromWatchlistId, returnTab){
   addModalType = existing ? (existing.mediaType||'movie') : fromWatchlistItem ? (fromWatchlistItem.mediaType||'movie') : 'movie';
   state.modal = {
     editingId: existing? existing.id : null,
+    returnTab: returnTab || 'watched',
     selected: (existing && existing.tmdbId) ? { id:existing.tmdbId, mediaType:existing.mediaType||'movie', title:existing.title, year:existing.year, poster:existing.poster, genres:existing.genres, runtimeMinutes:existing.runtimeMinutes } :
                (fromWatchlistItem && fromWatchlistItem.tmdbId) ? { id:fromWatchlistItem.tmdbId, mediaType:fromWatchlistItem.mediaType||'movie', title:fromWatchlistItem.title, year:fromWatchlistItem.year, poster:fromWatchlistItem.poster, genres:fromWatchlistItem.genres } : null,
     fromWatchlistId: fromWatchlistId || null,
@@ -1561,7 +1582,7 @@ function renderModal(){
         <label>Your rating</label>
         <div class="starrating" data-person="bailey">
           <div class="starrow">${starsHtml(f.ratingBailey)}</div>
-          <span class="starnum">${f.ratingBailey||0}/10</span>
+          <span class="starnum">${f.ratingBailey||0}/5</span>
         </div>
         <textarea id="f-review-b" rows="3" placeholder="Your review">${escapeHtml(f.reviewBailey)}</textarea>
       </div>
@@ -1570,7 +1591,7 @@ function renderModal(){
         <label>${escapeHtml(state.settings.partnerLabel)}'s rating</label>
         <div class="starrating" data-person="hilda">
           <div class="starrow">${starsHtml(f.ratingHilda)}</div>
-          <span class="starnum">${f.ratingHilda||0}/10</span>
+          <span class="starnum">${f.ratingHilda||0}/5</span>
         </div>
         <textarea id="f-review-h" rows="3" placeholder="${escapeHtml(state.settings.partnerLabel)}'s review">${escapeHtml(f.reviewHilda)}</textarea>
       </div>
@@ -1687,7 +1708,7 @@ function bindModal(){
         const rect = starEl.getBoundingClientRect();
         const isLeftHalf = (e.clientX - rect.left) < rect.width/2;
         const i = Number(starEl.dataset.star);
-        const value = isLeftHalf ? i*2-1 : i*2;
+        const value = isLeftHalf ? i-0.5 : i;
         if(person==='bailey') f.ratingBailey = (f.ratingBailey===value ? 0 : value);
         else f.ratingHilda = (f.ratingHilda===value ? 0 : value);
         render();
@@ -1762,8 +1783,9 @@ function bindModal(){
       await sSet('watchlists', state.watchlists);
     }
 
+    const returnTab = state.modal.returnTab || 'watched';
     state.modal = null;
-    state.tab = 'watched';
+    state.tab = returnTab;
     render();
   };
 
